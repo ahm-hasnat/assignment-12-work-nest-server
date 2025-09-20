@@ -30,6 +30,11 @@ async function run() {
      const workersCollection = client.db("workersDb").collection("allWorkers");
      const usersCollection = client.db("allUsersDb").collection("allUsers");
 
+app.post("/allUsers", async (req, res) => {
+  const user = req.body;
+  const result = await usersCollection.insertOne(user);
+  res.status(201).json(result);
+});
 
    app.get("/best-workers", async (req, res) => {
     const bestWorkers = await workersCollection
