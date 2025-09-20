@@ -27,10 +27,18 @@ async function run() {
     // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
 
+     const workersCollection = client.db("workersDb").collection("allWorkers");
      const usersCollection = client.db("allUsersDb").collection("allUsers");
 
 
-
+   app.get("/best-workers", async (req, res) => {
+    const bestWorkers = await workersCollection
+      .find({ role: "worker" })
+      .sort({ coins: -1 }) // sort descending
+      .limit(6)
+      .toArray();
+    res.send(bestWorkers);
+});
 
 
 
@@ -39,7 +47,7 @@ async function run() {
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
     // Ensures that the client will close when you finish/error
-    await client.close();
+    // await client.close();
   }
 }
 run().catch(console.dir);
