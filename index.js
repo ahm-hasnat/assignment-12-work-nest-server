@@ -35,6 +35,11 @@ app.post("/allUsers", async (req, res) => {
   const result = await usersCollection.insertOne(user);
   res.status(201).json(result);
 });
+app.post("/allWorkers", async (req, res) => {
+  const user = req.body;
+  const result = await workersCollection.insertOne(user);
+  res.status(201).json(result);
+});
 
    app.get("/best-workers", async (req, res) => {
     const bestWorkers = await workersCollection
