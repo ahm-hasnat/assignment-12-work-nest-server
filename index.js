@@ -41,6 +41,11 @@ app.post("/allWorkers", async (req, res) => {
   res.status(201).json(result);
 });
 
+ app.get("/allUsers", async (req, res) => {
+      const users = await usersCollection.find().toArray();
+      res.send(users);
+    });
+
    app.get("/best-workers", async (req, res) => {
     const bestWorkers = await workersCollection
       .find({ role: "worker" })
