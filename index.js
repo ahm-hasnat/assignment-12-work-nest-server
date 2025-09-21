@@ -41,6 +41,33 @@ app.post("/allWorkers", async (req, res) => {
   res.status(201).json(result);
 });
 
+// Create or update user by email (upsert)
+app.put("/allUsers/upsert/:email", async (req, res) => {
+  const email = req.params.email;
+  const userInfo = req.body;
+
+  const result = await usersCollection.updateOne(
+    { email },           // filter
+    { $set: userInfo },  // update fields
+    { upsert: true }     // create if not exists
+  );
+
+  res.json(result);
+});
+app.put("/allWorkers/upsert/:email", async (req, res) => {
+  const email = req.params.email;
+  const userInfo = req.body;
+
+  const result = await workersCollection.updateOne(
+    { email },           // filter
+    { $set: userInfo },  // update fields
+    { upsert: true }     // create if not exists
+  );
+
+  res.json(result);
+});
+
+
  app.get("/allUsers", async (req, res) => {
       const users = await usersCollection.find().toArray();
       res.send(users);
@@ -55,7 +82,17 @@ app.post("/allWorkers", async (req, res) => {
     res.send(bestWorkers);
 });
 
+app.get("/allUsers/:email/role", async (req, res) => {
+  const email = req.params.email;
+  const user = await usersCollection.findOne({ email });
+  res.json({ role: user.role }); // worker or buyer
+});
 
+app.get("/allUsers/:email", async (req, res) => {
+  const user = await usersCollection.findOne({ email: req.params.email });
+  if (!user) return res.status(404).json(null);
+  res.json(user);
+});
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
