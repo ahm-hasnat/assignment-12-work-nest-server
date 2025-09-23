@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
+const Stripe = require("stripe");
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -9,6 +10,7 @@ const port = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASSWORD}@cluster0.xkximz0.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
@@ -72,6 +74,58 @@ async function run() {
       }
     });
 
+    app.post("/create-payment-intent", async (req, res) => {
+      try {
+        const { amount } = req.body; // amount in cents
+        if (!amount || amount <= 0) {
+          return res.status(400).json({ error: "Invalid amount" });
+        }
+
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount,
+          currency: "usd",
+          payment_method_types: ["card"],
+        });
+
+        res.json({ clientSecret: paymentIntent.client_secret });
+      } catch (error) {
+        console.error("Stripe create-payment-intent error:", error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    app.post("/save-payment", async (req, res) => {
+      try {
+        const { paid_by, email, price, transactionId, packageName, coins } =
+          req.body;
+         
+         const usersCollection = client.db("allUsersDb").collection("allUsers"); 
+        const paymentsCollection = client
+          .db("paymentsDb")
+          .collection("payments");
+        const paymentData = {
+          paid_by,
+          email,
+          packageName,
+          price,
+          coins,
+          transactionId,
+          date: new Date(),
+        };
+
+        const result = await paymentsCollection.insertOne(paymentData);
+        res.json({ success: true, result });
+        await usersCollection.updateOne(
+  { email: email },
+  { $inc: { coins: coins } }, // increments coins by purchased amount
+  { upsert: true }            // creates user if not exist
+);
+      } catch (error) {
+        console.error("Save payment error:", error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
     // Create or update user by email (upsert)
     app.put("/allUsers/upsert/:email", async (req, res) => {
       const email = req.params.email;
@@ -98,65 +152,63 @@ async function run() {
       res.json(result);
     });
 
+    // Update a task by ID
+    app.put("/allTasks/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const { task_title, task_detail, required_workers, totalPayable } =
+          req.body;
 
-   // Update a task by ID
-app.put("/allTasks/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-    const { task_title, task_detail, required_workers, totalPayable } = req.body;
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({ message: "Invalid task ID" });
+        }
 
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).json({ message: "Invalid task ID" });
-    }
+        const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
+        if (!task) return res.status(404).json({ message: "Task not found" });
 
-    const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
-    if (!task) return res.status(404).json({ message: "Task not found" });
+        const user = await usersCollection.findOne({ email: task.added_By });
+        if (!user) return res.status(404).json({ message: "User not found" });
 
-    const user = await usersCollection.findOne({ email: task.added_By });
-    if (!user) return res.status(404).json({ message: "User not found" });
+        const oldTotal = Number(task.total_payable_amount || 0);
+        const newTotal = Number(totalPayable);
+        const diff = newTotal - oldTotal; // How much coins will change
 
-    const oldTotal = Number(task.total_payable_amount || 0);
-    const newTotal = Number(totalPayable);
-    const diff = newTotal - oldTotal; // How much coins will change
+        // ❌ Check if user has enough coins before updating
+        if (diff > 0 && user.coins < diff) {
+          return res.status(400).json({ message: "Insufficient coins" });
+        }
 
-    // ❌ Check if user has enough coins before updating
-    if (diff > 0 && user.coins < diff) {
-      return res.status(400).json({ message: "Insufficient coins" });
-    }
+        // ✅ Update task
+        const updateData = {
+          task_title,
+          task_detail,
+          required_workers: Number(required_workers),
+          total_payable_amount: newTotal,
+        };
 
-    // ✅ Update task
-    const updateData = {
-      task_title,
-      task_detail,
-      required_workers: Number(required_workers),
-      total_payable_amount: newTotal,
-    };
+        await tasksCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: updateData }
+        );
 
-    await tasksCollection.updateOne(
-      { _id: new ObjectId(id) },
-      { $set: updateData }
-    );
+        // ✅ Update user's coins
+        if (diff !== 0) {
+          await usersCollection.updateOne(
+            { email: task.added_By },
+            { $inc: { coins: -diff } } // Subtract if diff>0, add if diff<0
+          );
+        }
 
-    // ✅ Update user's coins
-    if (diff !== 0) {
-      await usersCollection.updateOne(
-        { email: task.added_By },
-        { $inc: { coins: -diff } } // Subtract if diff>0, add if diff<0
-      );
-    }
-
-    res.json({
-      success: true,
-      message: "Task updated successfully",
-      updated: updateData,
+        res.json({
+          success: true,
+          message: "Task updated successfully",
+          updated: updateData,
+        });
+      } catch (error) {
+        console.error("Error updating task:", error);
+        res.status(500).json({ message: "Failed to update task" });
+      }
     });
-
-  } catch (error) {
-    console.error("Error updating task:", error);
-    res.status(500).json({ message: "Failed to update task" });
-  }
-});
-
 
     app.get("/allUsers", async (req, res) => {
       const users = await usersCollection.find().toArray();
@@ -191,6 +243,25 @@ app.put("/allTasks/:id", async (req, res) => {
       const query = buyerEmail ? { buyer: buyerEmail } : {};
       const tasks = await tasksCollection.find(query).toArray();
       res.json(tasks);
+    });
+
+    app.get("/payments/:email", async (req, res) => {
+      try {
+        const email = req.params.email;
+        const paymentsCollection = client
+          .db("paymentsDb")
+          .collection("payments");
+
+        const payments = await paymentsCollection
+          .find({ email })
+          .sort({ date: -1 }) // latest payments first
+          .toArray();
+
+        res.json(payments);
+      } catch (error) {
+        console.error("Fetch payments error:", error);
+        res.status(500).json({ error: error.message });
+      }
     });
 
     app.delete("/allTasks/:id", async (req, res) => {
