@@ -30,6 +30,8 @@ async function run() {
     const workersCollection = client.db("workersDb").collection("allWorkers");
     const usersCollection = client.db("allUsersDb").collection("allUsers");
     const tasksCollection = client.db("allTasksDB").collection("allTasks");
+    const subCollection = client.db("submissionDB").collection("allSubmits");
+    const withdrawCollection = client.db("withdrawDB").collection("allWithdraws");
 
     app.post("/allUsers", async (req, res) => {
       const user = req.body;
@@ -45,31 +47,42 @@ async function run() {
     app.post("/allTasks", async (req, res) => {
       try {
         const tasksCollection = client.db("allTasksDB").collection("allTasks");
-        const taskData = req.body; // everything from form
+        const usersCollection = client.db("allUsersDb").collection("allUsers");
+        const taskData = req.body;
 
-        // Basic validation
-        if (
-          !taskData.task_title ||
-          !taskData.required_workers ||
-          !taskData.payable_amount
-        ) {
-          return res.status(400).send({ message: "Missing required fields" });
+        console.log(taskData);
+
+        // Fetch latest user data
+        const buyer = await usersCollection.findOne({
+          email: taskData.buyer_email,
+        });
+        if (!buyer) return res.status(404).send({ message: "User not found" });
+
+        const total_payable_amount =
+          Number(taskData.required_workers) * Number(taskData.payable_amount);
+
+        if (buyer.coins < total_payable_amount) {
+          return res.status(400).send({ message: "Insufficient coins" });
         }
 
-        // Construct task object
+        // Deduct coins
+        await usersCollection.updateOne(
+          { email: taskData.buyer_email },
+          { $inc: { coins: -total_payable_amount } }
+        );
+
         const newTask = {
-          ...taskData, // all form fields
+          ...taskData,
           required_workers: Number(taskData.required_workers),
           payable_amount: Number(taskData.payable_amount),
-          total_payable_amount:
-            Number(taskData.required_workers) * Number(taskData.payable_amount),
-          added_By: taskData.added_By || "unknown", // ensure email is saved
+          total_payable_amount,
+          added_By: taskData.added_By,
         };
 
         const result = await tasksCollection.insertOne(newTask);
         res.send(result);
       } catch (error) {
-        console.error("Error adding task:", error);
+        console.error(error);
         res.status(500).send({ message: "Failed to add task" });
       }
     });
@@ -98,8 +111,8 @@ async function run() {
       try {
         const { paid_by, email, price, transactionId, packageName, coins } =
           req.body;
-         
-         const usersCollection = client.db("allUsersDb").collection("allUsers"); 
+
+        const usersCollection = client.db("allUsersDb").collection("allUsers");
         const paymentsCollection = client
           .db("paymentsDb")
           .collection("payments");
@@ -116,15 +129,85 @@ async function run() {
         const result = await paymentsCollection.insertOne(paymentData);
         res.json({ success: true, result });
         await usersCollection.updateOne(
-  { email: email },
-  { $inc: { coins: coins } }, // increments coins by purchased amount
-  { upsert: true }            // creates user if not exist
-);
+          { email: email },
+          { $inc: { coins: coins } }, // increments coins by purchased amount
+          { upsert: true } // creates user if not exist
+        );
       } catch (error) {
         console.error("Save payment error:", error);
         res.status(500).json({ error: error.message });
       }
     });
+
+    app.post("/allSubmits", async (req, res) => {
+      try {
+        const submission = req.body;
+
+        const submissionData = {
+          ...submission,
+          current_date: new Date(),
+          status: "pending",
+        };
+
+        const result = await subCollection.insertOne(submissionData);
+
+        res.json({ success: true, result });
+      } catch (error) {
+        console.error("Error saving submission:", error);
+        res.status(500).json({ success: false, message: error.message });
+      }
+    });
+
+    // POST /withdrawals
+app.post("/withdrawals", async (req, res) => {
+  try {
+    const {
+      worker_email,
+      worker_name,
+      withdrawal_coin,
+      withdrawal_amount,
+      payment_system,
+      account_number,
+    } = req.body;
+
+    if (!worker_email || !withdrawal_coin || !withdrawal_amount || !payment_system || !account_number) {
+      return res.status(400).json({ message: "All fields are required" });
+    }
+
+    // Check if user exists and has enough coins
+    const user = await usersCollection.findOne({ email: worker_email });
+    if (!user) return res.status(404).json({ message: "User not found" });
+    if (user.coins < withdrawal_coin) {
+      return res.status(400).json({ message: "Insufficient coins" });
+    }
+
+    // Insert withdrawal request
+    const withdrawal = {
+      worker_email,
+      worker_name,
+      withdrawal_coin,
+      withdrawal_amount,
+      payment_system,
+      account_number,
+      withdraw_date: new Date(),
+      
+    };
+
+    const result = await withdrawCollection.insertOne(withdrawal);
+
+    // Update user's coins
+    await usersCollection.updateOne(
+      { email: worker_email },
+      { $inc: { coins: -withdrawal_coin } }
+    );
+
+    res.json({ success: true, insertedId: result.insertedId });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 
     // Create or update user by email (upsert)
     app.put("/allUsers/upsert/:email", async (req, res) => {
@@ -139,6 +222,7 @@ async function run() {
 
       res.json(result);
     });
+
     app.put("/allWorkers/upsert/:email", async (req, res) => {
       const email = req.params.email;
       const userInfo = req.body;
@@ -166,7 +250,7 @@ async function run() {
         const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
         if (!task) return res.status(404).json({ message: "Task not found" });
 
-        const user = await usersCollection.findOne({ email: task.added_By });
+        const user = await usersCollection.findOne({ email: task.buyer_email });
         if (!user) return res.status(404).json({ message: "User not found" });
 
         const oldTotal = Number(task.total_payable_amount || 0);
@@ -194,7 +278,7 @@ async function run() {
         // ✅ Update user's coins
         if (diff !== 0) {
           await usersCollection.updateOne(
-            { email: task.added_By },
+            { email: task.buyer_email },
             { $inc: { coins: -diff } } // Subtract if diff>0, add if diff<0
           );
         }
@@ -240,9 +324,14 @@ async function run() {
 
     app.get("/allTasks", async (req, res) => {
       const buyerEmail = req.query.buyer;
-      const query = buyerEmail ? { buyer: buyerEmail } : {};
+      const query = buyerEmail ? { buyer_email: buyerEmail } : {};
       const tasks = await tasksCollection.find(query).toArray();
       res.json(tasks);
+    });
+    app.get("/allTasks/:id", async (req, res) => {
+      const id = req.params.id;
+      const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
+      res.json(task);
     });
 
     app.get("/payments/:email", async (req, res) => {
@@ -263,6 +352,44 @@ async function run() {
         res.status(500).json({ error: error.message });
       }
     });
+
+    app.get("/allSubmits/:taskId/:workerEmail", async (req, res) => {
+  try {
+    const { taskId, workerEmail } = req.params; // get both from URL params
+
+    if (!workerEmail) {
+      return res.status(400).json({ message: "Worker email required" });
+    }
+
+    const submission = await subCollection.findOne({
+      task_id: taskId,
+      worker_email: workerEmail,
+      status: "pending",
+    });
+
+    res.json({ submitted: !!submission });
+  } catch (error) {
+    console.error("Error fetching submission:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+// Get all submissions for a worker
+app.get("/mySubmits/:workerEmail", async (req, res) => {
+  try {
+    const { workerEmail } = req.params;
+
+    const submissions = await subCollection
+      .find({ worker_email: workerEmail })
+      .sort({ current_date: -1 }) // newest first
+      .toArray();
+
+    res.json(submissions);
+  } catch (error) {
+    console.error("Error fetching submissions:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 
     app.delete("/allTasks/:id", async (req, res) => {
       try {
