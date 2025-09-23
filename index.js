@@ -139,24 +139,26 @@ async function run() {
       }
     });
 
-    app.post("/allSubmits", async (req, res) => {
-      try {
-        const submission = req.body;
+   app.post("/allSubmits", async (req, res) => {
+  try {
+    const submission = req.body;
 
-        const submissionData = {
-          ...submission,
-          current_date: new Date(),
-          status: "pending",
-        };
+    const submissionData = {
+      ...submission,
+      current_date: new Date(),
+      status: "pending",
+    };
 
-        const result = await subCollection.insertOne(submissionData);
+    // Insert the submission
+    const result = await subCollection.insertOne(submissionData);
 
-        res.json({ success: true, result });
-      } catch (error) {
-        console.error("Error saving submission:", error);
-        res.status(500).json({ success: false, message: error.message });
-      }
-    });
+    res.json({ success: true, result });
+  } catch (error) {
+    console.error("Error saving submission:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 
     // POST /withdrawals
 app.post("/withdrawals", async (req, res) => {
@@ -190,7 +192,7 @@ app.post("/withdrawals", async (req, res) => {
       payment_system,
       account_number,
       withdraw_date: new Date(),
-      
+      status:"pending",
     };
 
     const result = await withdrawCollection.insertOne(withdrawal);
@@ -226,7 +228,7 @@ app.post("/withdrawals", async (req, res) => {
     app.put("/allWorkers/upsert/:email", async (req, res) => {
       const email = req.params.email;
       const userInfo = req.body;
-
+console.log(userInfo);
       const result = await workersCollection.updateOne(
         { email }, // filter
         { $set: userInfo }, // update fields
@@ -411,7 +413,7 @@ app.get("/mySubmits/:workerEmail", async (req, res) => {
 
         // Refund coins (get user from allUsers)
         const refundAmount = Number(task.total_payable_amount) || 0;
-        const buyerEmail = task.added_By;
+        const buyerEmail = task.buyer_email;
 
         const user = await usersCollection.findOne({ email: buyerEmail });
         if (!user) {
@@ -435,6 +437,28 @@ app.get("/mySubmits/:workerEmail", async (req, res) => {
         res.status(500).json({ message: "Failed to delete task" });
       }
     });
+
+    app.delete("/allUsers/:id", async (req, res) => {
+  try {
+    const userId = req.params.id;
+
+    if (!ObjectId.isValid(userId)) {
+      return res.status(400).json({ success: false, message: "Invalid user ID" });
+    }
+
+    const result = await usersCollection.deleteOne({ _id: new ObjectId(userId) });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    res.json({ success: true, message: "User deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting user:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
