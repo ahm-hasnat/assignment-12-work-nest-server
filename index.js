@@ -7,12 +7,22 @@ const Stripe = require("stripe");
 const app = express();
 const port = process.env.PORT || 5000;
 
+const http = require("http");
+const { Server } = require("socket.io");
+
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: "*" },
+});
+
 app.use(cors());
 app.use(express.json());
 
+const adminEmail = process.env.ADMIN_EMAIL;
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASSWORD}@cluster0.xkximz0.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
+console.log(adminEmail);
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
   serverApi: {
@@ -35,6 +45,34 @@ async function run() {
       .db("withdrawDB")
       .collection("allWithdraws");
     const paymentsCollection = client.db("paymentsDb").collection("payments");
+    const notificationsCollection = client
+      .db("notificationsDb")
+      .collection("notifications");
+
+    const createNotification = async ({ message, toEmail, actionRoute }) => {
+      const notification = {
+        message,
+        toEmail,
+        actionRoute,
+        time: new Date(),
+        read: false,
+      };
+      const result = await notificationsCollection.insertOne(notification);
+      io.to(toEmail).emit("new_notification", notification); // Real-time emit
+      return result;
+    };
+
+    io.on("connection", (socket) => {
+      console.log("User connected:", socket.id);
+
+      socket.on("join", (email) => {
+        socket.join(email); // Join a room by user email
+      });
+
+      socket.on("disconnect", () => {
+        console.log("User disconnected:", socket.id);
+      });
+    });
 
     app.post("/allUsers", async (req, res) => {
       const user = req.body;
@@ -183,6 +221,12 @@ async function run() {
           { $set: { status: "approved" } }
         );
 
+        await createNotification({
+          message: `You earned ${submission.payable_amount} coins from ${submission.buyer_name} for completing ${submission.task_title}`,
+          toEmail: submission.worker_email,
+          actionRoute: "/dashboard",
+        });
+
         res.status(200).json({ message: "Submission approved successfully" });
       } catch (err) {
         console.error(err);
@@ -207,6 +251,17 @@ async function run() {
           { _id: new ObjectId(submission.task_id) },
           { $inc: { currently_required_workers: -1 } }
         );
+
+         const notification = {
+        message: `${submission.worker_name} submitted work for your task "${task.task_title}"`,
+        toEmail: task.buyer_email, // notify the buyer
+        actionRoute: "/dashboard/buyer-home",
+        time: new Date(),
+        read: false,
+      };
+
+      await notificationsCollection.insertOne(notification);
+
 
         res.json({ success: true, result });
       } catch (error) {
@@ -250,6 +305,13 @@ async function run() {
         };
 
         const result = await withdrawCollection.insertOne(withdrawal);
+
+         await createNotification({
+      message: `${worker_name} requested a withdrawal of ${withdrawal_coin} coins`,
+      toEmail:adminEmail, // or another user who should be notified
+      actionRoute: "/dashboard", // link to admin dashboard
+    });
+
 
         res.json({ success: true, insertedId: result.insertedId });
       } catch (err) {
@@ -349,82 +411,87 @@ async function run() {
 
     // Update a task by ID
     app.put("/allTasks/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-    const { task_title, task_detail, currently_required_workers } = req.body;
+      try {
+        const id = req.params.id;
+        const { task_title, task_detail, currently_required_workers } =
+          req.body;
 
-    // Validate task ID
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).json({ message: "Invalid task ID" });
-    }
+        // Validate task ID
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({ message: "Invalid task ID" });
+        }
 
-    // Fetch task
-    const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
-    if (!task) return res.status(404).json({ message: "Task not found" });
+        // Fetch task
+        const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
+        if (!task) return res.status(404).json({ message: "Task not found" });
 
-    // Fetch user
-    const user = await usersCollection.findOne({ email: task.buyer_email });
-    if (!user) return res.status(404).json({ message: "User not found" });
+        // Fetch user
+        const user = await usersCollection.findOne({ email: task.buyer_email });
+        if (!user) return res.status(404).json({ message: "User not found" });
 
-    // Convert numbers
-    const oldRequiredWorkers = Number(task.required_workers || 0);
-    const oldCurrentlyRequired = Number(task.currently_required_workers || 0);
-    const payablePerWorker = Number(task.payable_amount || 0);
-    const oldTotalPayable = Number(task.total_payable_amount || 0);
+        // Convert numbers
+        const oldRequiredWorkers = Number(task.required_workers || 0);
+        const oldCurrentlyRequired = Number(
+          task.currently_required_workers || 0
+        );
+        const payablePerWorker = Number(task.payable_amount || 0);
+        const oldTotalPayable = Number(task.total_payable_amount || 0);
 
-    // Workers already submitted tasks
-    const submittedWorkers = oldRequiredWorkers - oldCurrentlyRequired;
+        // Workers already submitted tasks
+        const submittedWorkers = oldRequiredWorkers - oldCurrentlyRequired;
 
-    // New total required workers after buyer update
-    const desiredCurrentlyRequired = Number(currently_required_workers || oldCurrentlyRequired);
-    const newRequiredWorkers = submittedWorkers + desiredCurrentlyRequired;
+        // New total required workers after buyer update
+        const desiredCurrentlyRequired = Number(
+          currently_required_workers || oldCurrentlyRequired
+        );
+        const newRequiredWorkers = submittedWorkers + desiredCurrentlyRequired;
 
-    // Calculate differences
-    const workerDiff = newRequiredWorkers - oldRequiredWorkers; // change in total required workers
-    const newTotalPayable = newRequiredWorkers * payablePerWorker; // new total coins
-    const coinDiff = newTotalPayable - oldTotalPayable; // how coins should change
+        // Calculate differences
+        const workerDiff = newRequiredWorkers - oldRequiredWorkers; // change in total required workers
+        const newTotalPayable = newRequiredWorkers * payablePerWorker; // new total coins
+        const coinDiff = newTotalPayable - oldTotalPayable; // how coins should change
 
-    // Check if user has enough coins if increasing
-    if (coinDiff > 0 && user.coins < coinDiff) {
-      return res.status(400).json({ message: "Insufficient coins" });
-    }
+        // Check if user has enough coins if increasing
+        if (coinDiff > 0 && user.coins < coinDiff) {
+          return res.status(400).json({ message: "Insufficient coins" });
+        }
 
-    // Update task atomically
-    const updateData = {
-      task_title,
-      task_detail,
-      currently_required_workers: desiredCurrentlyRequired,
-      total_payable_amount: newTotalPayable,
-    };
+        // Update task atomically
+        const updateData = {
+          task_title,
+          task_detail,
+          currently_required_workers: desiredCurrentlyRequired,
+          total_payable_amount: newTotalPayable,
+        };
 
-    await tasksCollection.updateOne(
-      { _id: new ObjectId(id) },
-      {
-        $set: updateData,
-        $inc: { required_workers: workerDiff },
+        await tasksCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: updateData,
+            $inc: { required_workers: workerDiff },
+          }
+        );
+
+        // Update user coins if needed
+        if (coinDiff !== 0) {
+          await usersCollection.updateOne(
+            { email: task.buyer_email },
+            { $inc: { coins: -coinDiff } }
+          );
+        }
+
+        res.json({
+          success: true,
+          message: "Task updated successfully",
+          updated: updateData,
+          coinsChanged: coinDiff,
+          workerChanged: workerDiff,
+        });
+      } catch (error) {
+        console.error("Error updating task:", error);
+        res.status(500).json({ message: "Failed to update task" });
       }
-    );
-
-    // Update user coins if needed
-    if (coinDiff !== 0) {
-      await usersCollection.updateOne(
-        { email: task.buyer_email },
-        { $inc: { coins: -coinDiff } }
-      );
-    }
-
-    res.json({
-      success: true,
-      message: "Task updated successfully",
-      updated: updateData,
-      coinsChanged: coinDiff,
-      workerChanged: workerDiff,
     });
-  } catch (error) {
-    console.error("Error updating task:", error);
-    res.status(500).json({ message: "Failed to update task" });
-  }
-});
 
     app.put("/allWithdraws/:id", async (req, res) => {
       try {
@@ -476,6 +543,12 @@ async function run() {
           await paymentsCollection.insertOne(paymentData);
         }
 
+        await createNotification({
+          message: `Your withdrawal request for ${withdraw.withdrawal_coin} coins has been approved`,
+          toEmail: withdraw.worker_email,
+          actionRoute: "/dashboard",
+        });
+
         // Update withdrawal status
         await withdrawCollection.updateOne(
           { _id: new ObjectId(id) },
@@ -515,6 +588,12 @@ async function run() {
             .status(404)
             .json({ message: "Submission not found or already rejected" });
         }
+
+        await createNotification({
+          message: `Your submission for ${submission.task_title} was rejected by ${submission.buyer_name}`,
+          toEmail: submission.worker_email,
+          actionRoute: "/dashboard/worker-home",
+        });
 
         res.json({
           success: true,
@@ -693,6 +772,12 @@ async function run() {
           { $set: { coins: updatedCoins } }
         );
 
+        await createNotification({
+      message: `Your task "${task.task_title}" was deleted by Admin. Refunded ${refundAmount} coins.`,
+      toEmail: buyerEmail,
+      actionRoute: "/dashboard/my-tasks",
+    });
+
         res.json({
           message: "Task deleted successfully, coins refunded",
           refund: refundAmount,
@@ -731,6 +816,24 @@ async function run() {
       }
     });
 
+    app.get("/notifications", async (req, res) => {
+      const { toEmail } = req.query;
+      const notifications = await notificationsCollection
+        .find({ toEmail })
+        .sort({ time: -1 })
+        .toArray();
+      res.json(notifications);
+    });
+
+    // Mark notification as read
+    app.patch("/notifications/:id/read", async (req, res) => {
+      await notificationsCollection.updateOne(
+        { _id: new ObjectId(req.params.id) },
+        { $set: { read: true } }
+      );
+      res.json({ success: true });
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
@@ -747,6 +850,7 @@ app.get("/", (req, res) => {
   res.send("Looking for money in server..!");
 });
 
-app.listen(port, () => {
-  console.log(`WorkNest server is running on port ${port}`);
+server.listen(port, () => {
+  console.log(`WorkNest server is running on port ${port} with Socket.IO`);
 });
+
