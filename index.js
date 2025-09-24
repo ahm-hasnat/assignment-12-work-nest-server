@@ -78,6 +78,7 @@ async function run() {
         const newTask = {
           ...taskData,
           required_workers: Number(taskData.required_workers),
+          currently_required_workers: Number(taskData.required_workers),
           payable_amount: Number(taskData.payable_amount),
           total_payable_amount,
           added_By: taskData.added_By,
@@ -143,6 +144,55 @@ async function run() {
         res.status(500).json({ error: error.message });
       }
     });
+
+    app.post("/submissions/approve/:id", async (req, res) => {
+  const submissionId = req.params.id;
+
+  try {
+    const submission = await subCollection.findOne({ _id: new ObjectId(submissionId) });
+    if (!submission) return res.status(404).json({ message: "Submission not found" });
+
+    // 1. Add entry to payment collection
+    const paymentData = {
+      payment_type: "give",
+      worker_name: submission.worker_name,
+      task_title: submission.task_title,
+      coins: submission.payable_amount,
+      submission_date: submission.current_date,
+      approval_date: new Date(),
+      task_id: submission.task_id,
+      worker_email: submission.worker_email,
+      
+      buyer_name: submission.buyer_name,
+
+      buyer_email: submission.buyer_email,
+    };
+    await paymentsCollection.insertOne(paymentData);
+
+    // 2. Update worker coins in allUsers collection
+    await usersCollection.updateOne(
+      { email: submission.worker_email },
+      { $inc: { coins: submission.payable_amount } }
+    );
+
+    // 3. Update submission status to 'approved'
+    await subCollection.updateOne(
+      { _id: new ObjectId(submissionId) },
+      { $set: { status: "approved" } }
+    );
+
+    // 4. Decrease required_workers in allTasks
+    await tasksCollection.updateOne(
+      { _id: new ObjectId(submission.task_id) },
+      { $inc: { currently_required_workers: -1 } }
+    );
+
+    res.status(200).json({ message: "Submission approved successfully" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Approval failed" });
+  }
+});
 
     app.post("/allSubmits", async (req, res) => {
       try {
@@ -238,7 +288,7 @@ async function run() {
     app.put("/allTasks/:id", async (req, res) => {
       try {
         const id = req.params.id;
-        const { task_title, task_detail, required_workers, totalPayable } =
+        const { task_title, task_detail, currently_required_workers, totalPayable } =
           req.body;
 
         if (!ObjectId.isValid(id)) {
@@ -253,7 +303,10 @@ async function run() {
 
         const oldTotal = Number(task.total_payable_amount || 0);
         const newTotal = Number(totalPayable);
+        const workerOldTotal = Number(task.currently_required_workers || 0);
+        const workerNewTotal = Number(currently_required_workers);
         const diff = newTotal - oldTotal; // How much coins will change
+        const workerDiff = workerNewTotal - workerOldTotal; // How much coins will change
 
         // ❌ Check if user has enough coins before updating
         if (diff > 0 && user.coins < diff) {
@@ -264,10 +317,14 @@ async function run() {
         const updateData = {
           task_title,
           task_detail,
-          required_workers: Number(required_workers),
+          currently_required_workers: Number(currently_required_workers),
           total_payable_amount: newTotal,
         };
 
+        await tasksCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $inc: { required_workers: workerDiff } }
+        );
         await tasksCollection.updateOne(
           { _id: new ObjectId(id) },
           { $set: updateData }
@@ -277,7 +334,7 @@ async function run() {
         if (diff !== 0) {
           await usersCollection.updateOne(
             { email: task.buyer_email },
-            { $inc: { coins: -diff } } // Subtract if diff>0, add if diff<0
+            { $inc: { coins: diff } } // Subtract if diff>0, add if diff<0
           );
         }
 
@@ -355,6 +412,30 @@ async function run() {
   }
 });
 
+app.patch("/submissions/reject/:id", async (req, res) => {
+  const submissionId = req.params.id;
+
+  try {
+    if (!ObjectId.isValid(submissionId)) {
+      return res.status(400).json({ message: "Invalid submission ID" });
+    }
+
+    const result = await subCollection.updateOne(
+      { _id: new ObjectId(submissionId) },
+      { $set: { status: "rejected" } }
+    );
+
+    if (result.modifiedCount === 0) {
+      return res.status(404).json({ message: "Submission not found or already rejected" });
+    }
+
+    res.json({ success: true, message: "Submission rejected successfully" });
+  } catch (err) {
+    console.error("Error rejecting submission:", err);
+    res.status(500).json({ message: "Failed to reject submission" });
+  }
+});
+
     app.get("/allUsers", async (req, res) => {
       const users = await usersCollection.find().toArray();
       res.send(users);
@@ -393,6 +474,11 @@ async function run() {
       const id = req.params.id;
       const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
       res.json(task);
+    });
+    app.get("/allTasks/buyer/:email", async (req, res) => {
+      const buyerEmail = req.params.email;
+      const tasks = await tasksCollection.find({ buyer_email: buyerEmail }).toArray();
+      res.json(tasks);
     });
     // Assuming you have Express and a MongoDB collection set up
     app.get("/payments", async (req, res) => {
@@ -464,6 +550,16 @@ async function run() {
     app.get("/allWithdraws", async (req, res) => {
       const withDraws = await withdrawCollection.find().toArray();
       res.send(withDraws);
+    });
+
+     app.get("/submissions", async (req, res) => {
+      try {
+        const submissions = await subCollection.find({}).toArray();
+        res.status(200).json(submissions);
+      } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Failed to fetch submissions" });
+      }
     });
 
     app.delete("/allTasks/:id", async (req, res) => {
