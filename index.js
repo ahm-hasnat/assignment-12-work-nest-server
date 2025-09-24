@@ -349,78 +349,82 @@ async function run() {
 
     // Update a task by ID
     app.put("/allTasks/:id", async (req, res) => {
-      try {
-        const id = req.params.id;
-        const { task_title, task_detail, currently_required_workers } =
-          req.body;
+  try {
+    const id = req.params.id;
+    const { task_title, task_detail, currently_required_workers } = req.body;
 
-        // Validate ID
-        if (!ObjectId.isValid(id)) {
-          return res.status(400).json({ message: "Invalid task ID" });
-        }
+    // Validate task ID
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid task ID" });
+    }
 
-        // Fetch task
-        const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
-        if (!task) return res.status(404).json({ message: "Task not found" });
+    // Fetch task
+    const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
+    if (!task) return res.status(404).json({ message: "Task not found" });
 
-        // Fetch user
-        const user = await usersCollection.findOne({ email: task.buyer_email });
-        if (!user) return res.status(404).json({ message: "User not found" });
+    // Fetch user
+    const user = await usersCollection.findOne({ email: task.buyer_email });
+    if (!user) return res.status(404).json({ message: "User not found" });
 
-        // Convert values to numbers
-        const oldRequiredWorkers = Number(task.required_workers || 0);
-        const newRequiredWorkers = Number(
-          currently_required_workers || oldRequiredWorkers
-        );
-        const payablePerWorker = Number(task.payable_amount || 0);
-        const oldTotalPayable = Number(task.total_payable_amount || 0);
+    // Convert numbers
+    const oldRequiredWorkers = Number(task.required_workers || 0);
+    const oldCurrentlyRequired = Number(task.currently_required_workers || 0);
+    const payablePerWorker = Number(task.payable_amount || 0);
+    const oldTotalPayable = Number(task.total_payable_amount || 0);
 
-        // Calculate differences
-        const workerDiff = newRequiredWorkers - oldRequiredWorkers; // +ve if increasing workers
-        const newTotalPayable = oldTotalPayable + workerDiff * payablePerWorker;
-        const coinDiff = newTotalPayable - oldTotalPayable; // coins to increment/decrement
+    // Workers already submitted tasks
+    const submittedWorkers = oldRequiredWorkers - oldCurrentlyRequired;
 
-        // Check if user has enough coins if increasing
-        if (coinDiff > 0 && user.coins < coinDiff) {
-          return res.status(400).json({ message: "Insufficient coins" });
-        }
+    // New total required workers after buyer update
+    const desiredCurrentlyRequired = Number(currently_required_workers || oldCurrentlyRequired);
+    const newRequiredWorkers = submittedWorkers + desiredCurrentlyRequired;
 
-        // Atomic update: task + required_workers
-        const updateData = {
-          task_title,
-          task_detail,
-          currently_required_workers: newRequiredWorkers,
-          total_payable_amount: newTotalPayable,
-        };
+    // Calculate differences
+    const workerDiff = newRequiredWorkers - oldRequiredWorkers; // change in total required workers
+    const newTotalPayable = newRequiredWorkers * payablePerWorker; // new total coins
+    const coinDiff = newTotalPayable - oldTotalPayable; // how coins should change
 
-        await tasksCollection.updateOne(
-          { _id: new ObjectId(id) },
-          {
-            $set: updateData,
-            $inc: { required_workers: workerDiff },
-          }
-        );
+    // Check if user has enough coins if increasing
+    if (coinDiff > 0 && user.coins < coinDiff) {
+      return res.status(400).json({ message: "Insufficient coins" });
+    }
 
-        // Update user coins
-        if (coinDiff !== 0) {
-          await usersCollection.updateOne(
-            { email: task.buyer_email },
-            { $inc: { coins: -coinDiff } }
-          );
-        }
+    // Update task atomically
+    const updateData = {
+      task_title,
+      task_detail,
+      currently_required_workers: desiredCurrentlyRequired,
+      total_payable_amount: newTotalPayable,
+    };
 
-        res.json({
-          success: true,
-          message: "Task updated successfully",
-          updated: updateData,
-          coinsChanged: coinDiff,
-          workerChanged: workerDiff,
-        });
-      } catch (error) {
-        console.error("Error updating task:", error);
-        res.status(500).json({ message: "Failed to update task" });
+    await tasksCollection.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: updateData,
+        $inc: { required_workers: workerDiff },
       }
+    );
+
+    // Update user coins if needed
+    if (coinDiff !== 0) {
+      await usersCollection.updateOne(
+        { email: task.buyer_email },
+        { $inc: { coins: -coinDiff } }
+      );
+    }
+
+    res.json({
+      success: true,
+      message: "Task updated successfully",
+      updated: updateData,
+      coinsChanged: coinDiff,
+      workerChanged: workerDiff,
     });
+  } catch (error) {
+    console.error("Error updating task:", error);
+    res.status(500).json({ message: "Failed to update task" });
+  }
+});
 
     app.put("/allWithdraws/:id", async (req, res) => {
       try {
