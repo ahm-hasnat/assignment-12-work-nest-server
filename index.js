@@ -183,12 +183,6 @@ async function run() {
           { $set: { status: "approved" } }
         );
 
-        // 4. Decrease required_workers in allTasks
-        await tasksCollection.updateOne(
-          { _id: new ObjectId(submission.task_id) },
-          { $inc: { currently_required_workers: -1 } }
-        );
-
         res.status(200).json({ message: "Submission approved successfully" });
       } catch (err) {
         console.error(err);
@@ -208,6 +202,11 @@ async function run() {
 
         // Insert the submission
         const result = await subCollection.insertOne(submissionData);
+        // 4. Decrease required_workers in allTasks
+        await tasksCollection.updateOne(
+          { _id: new ObjectId(submission.task_id) },
+          { $inc: { currently_required_workers: -1 } }
+        );
 
         res.json({ success: true, result });
       } catch (error) {
@@ -261,152 +260,152 @@ async function run() {
 
     // Create or update user by email (upsert)
     // Upsert user in allUsers
-   // Users
-// Create user if not exist
-// Users
-app.post("/allUsers", async (req, res) => {
-  
-   
-try{
-    // User does not exist → create full document
-     await usersCollection.insertOne({
-      name: user.name,
-      email: user.email,
-      provider: user.provider,
-      photoURL: user.photoURL,
-      role: user.role || "worker",
-      coins: user.coins || 10,
-      created_at: new Date().toISOString(),
-      last_log_in: new Date().toISOString(),
+    // Users
+    // Create user if not exist
+    // Users
+    app.post("/allUsers", async (req, res) => {
+      try {
+        // User does not exist → create full document
+        await usersCollection.insertOne({
+          name: user.name,
+          email: user.email,
+          provider: user.provider,
+          photoURL: user.photoURL,
+          role: user.role || "worker",
+          coins: user.coins || 10,
+          created_at: new Date().toISOString(),
+          last_log_in: new Date().toISOString(),
+        });
+
+        res.status(201).json({ message: "New user created", result });
+      } catch (err) {
+        console.error("Error creating/updating user:", err);
+        res.status(500).json({ message: "Server error" });
+      }
     });
 
-    res.status(201).json({ message: "New user created", result });
-  } catch (err) {
-    console.error("Error creating/updating user:", err);
-    res.status(500).json({ message: "Server error" });
-  }
-});
+    // Workers
+    app.post("/allWorkers", async (req, res) => {
+      try {
+        await workersCollection.insertOne({
+          name: user.name,
+          email: user.email,
+          provider: user.provider,
+          photoURL: user.photoURL,
+          role: "worker",
+          coins: 10,
+          created_at: new Date().toISOString(),
+          last_log_in: new Date().toISOString(),
+        });
 
-// Workers
-app.post("/allWorkers", async (req, res) => {
-  try {
-    
-       await workersCollection.insertOne({
-      name: user.name,
-      email: user.email,
-      provider: user.provider,
-      photoURL: user.photoURL,
-      role: "worker",
-      coins: 10,
-      created_at: new Date().toISOString(),
-      last_log_in: new Date().toISOString(),
+        res.status(201).json({ message: "New worker created", result });
+      } catch (err) {
+        console.error("Error creating/updating worker:", err);
+        res.status(500).json({ message: "Server error" });
+      }
     });
 
-    res.status(201).json({ message: "New worker created", result });
-  } catch (err) {
-    console.error("Error creating/updating worker:", err);
-    res.status(500).json({ message: "Server error" });
-  }
-});
+    // Update last_log_in for an existing user
+    app.patch("/allUsers/:email", async (req, res) => {
+      try {
+        const email = req.params.email;
 
-// Update last_log_in for an existing user
-app.patch("/allUsers/:email", async (req, res) => {
-  try {
-    const email = req.params.email;
+        const result = await usersCollection.updateOne(
+          { email },
+          { $set: { last_log_in: new Date().toISOString() } }
+        );
 
-    const result = await usersCollection.updateOne(
-      { email },
-      { $set: { last_log_in: new Date().toISOString() } }
-    );
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ message: "User not found" });
+        }
 
-    if (result.matchedCount === 0) {
-      return res.status(404).json({ message: "User not found" });
-    }
+        res.json({ success: true, message: "Last login updated" });
+      } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
 
-    res.json({ success: true, message: "Last login updated" });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
+    // Update last_log_in for an existing worker
+    app.patch("/allWorkers/:email", async (req, res) => {
+      try {
+        const email = req.params.email;
 
-// Update last_log_in for an existing worker
-app.patch("/allWorkers/:email", async (req, res) => {
-  try {
-    const email = req.params.email;
+        const result = await workersCollection.updateOne(
+          { email },
+          { $set: { last_log_in: new Date().toISOString() } }
+        );
 
-    const result = await workersCollection.updateOne(
-      { email },
-      { $set: { last_log_in: new Date().toISOString() } }
-    );
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ message: "Worker not found" });
+        }
 
-    if (result.matchedCount === 0) {
-      return res.status(404).json({ message: "Worker not found" });
-    }
-
-    res.json({ success: true, message: "Last login updated" });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
+        res.json({ success: true, message: "Last login updated" });
+      } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
 
     // Update a task by ID
     app.put("/allTasks/:id", async (req, res) => {
       try {
         const id = req.params.id;
-        const {
-          task_title,
-          task_detail,
-          currently_required_workers,
-          totalPayable,
-        } = req.body;
+        const { task_title, task_detail, currently_required_workers } =
+          req.body;
 
+        // Validate ID
         if (!ObjectId.isValid(id)) {
           return res.status(400).json({ message: "Invalid task ID" });
         }
 
+        // Fetch task
         const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
         if (!task) return res.status(404).json({ message: "Task not found" });
 
+        // Fetch user
         const user = await usersCollection.findOne({ email: task.buyer_email });
         if (!user) return res.status(404).json({ message: "User not found" });
 
-        const oldTotal = Number(task.total_payable_amount || 0);
-        const newTotal = Number(totalPayable);
-        const workerOldTotal = Number(task.currently_required_workers || 0);
-        const workerNewTotal = Number(currently_required_workers);
-        const diff = newTotal - oldTotal; // How much coins will change
-        const workerDiff = workerNewTotal - workerOldTotal; // How much coins will change
+        // Convert values to numbers
+        const oldRequiredWorkers = Number(task.required_workers || 0);
+        const newRequiredWorkers = Number(
+          currently_required_workers || oldRequiredWorkers
+        );
+        const payablePerWorker = Number(task.payable_amount || 0);
+        const oldTotalPayable = Number(task.total_payable_amount || 0);
 
-        // ❌ Check if user has enough coins before updating
-        if (diff > 0 && user.coins < diff) {
+        // Calculate differences
+        const workerDiff = newRequiredWorkers - oldRequiredWorkers; // +ve if increasing workers
+        const newTotalPayable = oldTotalPayable + workerDiff * payablePerWorker;
+        const coinDiff = newTotalPayable - oldTotalPayable; // coins to increment/decrement
+
+        // Check if user has enough coins if increasing
+        if (coinDiff > 0 && user.coins < coinDiff) {
           return res.status(400).json({ message: "Insufficient coins" });
         }
 
-        // ✅ Update task
+        // Atomic update: task + required_workers
         const updateData = {
           task_title,
           task_detail,
-          currently_required_workers: Number(currently_required_workers),
-          total_payable_amount: newTotal,
+          currently_required_workers: newRequiredWorkers,
+          total_payable_amount: newTotalPayable,
         };
 
         await tasksCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $inc: { required_workers: workerDiff } }
-        );
-        await tasksCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: updateData }
+          {
+            $set: updateData,
+            $inc: { required_workers: workerDiff },
+          }
         );
 
-        // ✅ Update user's coins
-        if (diff !== 0) {
+        // Update user coins
+        if (coinDiff !== 0) {
           await usersCollection.updateOne(
             { email: task.buyer_email },
-            { $inc: { coins: diff } } // Subtract if diff>0, add if diff<0
+            { $inc: { coins: -coinDiff } }
           );
         }
 
@@ -414,6 +413,8 @@ app.patch("/allWorkers/:email", async (req, res) => {
           success: true,
           message: "Task updated successfully",
           updated: updateData,
+          coinsChanged: coinDiff,
+          workerChanged: workerDiff,
         });
       } catch (error) {
         console.error("Error updating task:", error);
@@ -488,7 +489,10 @@ app.patch("/allWorkers/:email", async (req, res) => {
 
     app.patch("/submissions/reject/:id", async (req, res) => {
       const submissionId = req.params.id;
-
+      // Find the submission
+      const submission = await subCollection.findOne({
+        _id: new ObjectId(submissionId),
+      });
       try {
         if (!ObjectId.isValid(submissionId)) {
           return res.status(400).json({ message: "Invalid submission ID" });
@@ -498,7 +502,10 @@ app.patch("/allWorkers/:email", async (req, res) => {
           { _id: new ObjectId(submissionId) },
           { $set: { status: "rejected" } }
         );
-
+        await tasksCollection.updateOne(
+          { _id: new ObjectId(submission.task_id) },
+          { $inc: { currently_required_workers: 1 } }
+        );
         if (result.modifiedCount === 0) {
           return res
             .status(404)
@@ -530,16 +537,15 @@ app.patch("/allWorkers/:email", async (req, res) => {
     });
 
     app.get("/allUsers/:email/role", async (req, res) => {
-  const email = req.params.email;
-  const user = await usersCollection.findOne({ email });
+      const email = req.params.email;
+      const user = await usersCollection.findOne({ email });
 
-  if (!user) {
-    return res.status(404).json({ message: "User not found" });
-  }
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
 
-  res.json({ role: user.role });
-});
-
+      res.json({ role: user.role });
+    });
 
     app.get("/allUsers/:email", async (req, res) => {
       const user = await usersCollection.findOne({ email: req.params.email });
