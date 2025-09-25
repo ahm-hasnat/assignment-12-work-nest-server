@@ -1,28 +1,34 @@
 const express = require("express");
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
-require("dotenv").config();
+const dotenv = require("dotenv");
 const Stripe = require("stripe");
+const admin = require("firebase-admin");
+
+dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 5000;
-
 const http = require("http");
 const { Server } = require("socket.io");
-
+app.use(cors());
+app.use(express.json());
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: "*" },
 });
 
-app.use(cors());
-app.use(express.json());
+const serviceAccount = JSON.parse(
+  Buffer.from(process.env.FIREBASE_SERVICE_KEY, "base64").toString("utf8")
+);
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
 
 const adminEmail = process.env.ADMIN_EMAIL;
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASSWORD}@cluster0.xkximz0.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
-console.log(adminEmail);
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
   serverApi: {
@@ -37,7 +43,9 @@ async function run() {
     // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
 
-    const workersCollection = client.db("workersDb").collection("allWorkers");
+    const workersCollection = client
+      .db("bestWorkersDb")
+      .collection("bestWorkers");
     const usersCollection = client.db("allUsersDb").collection("allUsers");
     const tasksCollection = client.db("allTasksDB").collection("allTasks");
     const subCollection = client.db("submissionDB").collection("allSubmits");
@@ -49,6 +57,21 @@ async function run() {
       .db("notificationsDb")
       .collection("notifications");
 
+    io.on("connection", (socket) => {
+      console.log("User connected:", socket.id);
+
+      // Join room by email
+      socket.on("join", (email) => {
+        console.log(`${email} joined`);
+        socket.join(email);
+      });
+
+      socket.on("disconnect", () => {
+        console.log("User disconnected:", socket.id);
+      });
+    });
+
+    // Backend function
     const createNotification = async ({ message, toEmail, actionRoute }) => {
       const notification = {
         message,
@@ -57,41 +80,85 @@ async function run() {
         time: new Date(),
         read: false,
       };
-      const result = await notificationsCollection.insertOne(notification);
-      io.to(toEmail).emit("new_notification", notification); // Real-time emit
-      return result;
+
+      // Save to MongoDB
+      await notificationsCollection.insertOne(notification);
+
+      // Delay slightly to ensure socket has joined the room
+      setTimeout(async () => {
+        const clients = await io.in(toEmail).fetchSockets();
+        if (clients.length > 0) {
+          io.to(toEmail).emit("new_notification", notification);
+        }
+      }, 50); // 50ms delay ensures client has joined
+
+      return notification;
     };
 
-    io.on("connection", (socket) => {
-      console.log("User connected:", socket.id);
+    const verifyFBToken = async (req, res, next) => {
+      const authHeader = req.headers.authorization;
+      if (!authHeader) {
+        return res.status(401).send({ message: "unauthorized access" });
+      }
+      const token = authHeader.split(" ")[1];
+      if (!token) {
+        return res.status(401).send({ message: "unauthorized access" });
+      }
 
-      socket.on("join", (email) => {
-        socket.join(email); // Join a room by user email
-      });
+      // verify the token
+      try {
+        const decoded = await admin.auth().verifyIdToken(token);
+        req.decoded = decoded;
+        next();
+      } catch (error) {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+    };
 
-      socket.on("disconnect", () => {
-        console.log("User disconnected:", socket.id);
-      });
-    });
+    const verifyRoles = (roles) => {
+      return async (req, res, next) => {
+        const email = req.decoded?.email;
+        if (!email) return res.status(401).json({ message: "Unauthorized" });
+
+        const user = await usersCollection.findOne({ email });
+        if (!user || !roles.includes(user.role)) {
+          return res.status(403).json({ message: "Forbidden access" });
+        }
+
+        req.user = user;
+        next();
+      };
+    };
 
     app.post("/allUsers", async (req, res) => {
-      const user = req.body;
-      const result = await usersCollection.insertOne(user);
-      res.status(201).json(result);
+      try {
+        const user = req.body;
+
+        // Insert new user
+        const result = await usersCollection.insertOne(user);
+        // 🔔 Send welcome notification to the user
+        await createNotification({
+          message: `🎉 Congratulations ${
+            user.name
+          }! Your account has been created. You got ${user.coins || 10} coins!`,
+          toEmail: user.email,
+          actionRoute: "/dashboard",
+        });
+
+        res.status(201).json({ message: "New user created", result });
+      } catch (err) {
+        console.error("Error creating user:", err);
+        res.status(500).json({ message: "Server error" });
+      }
     });
-    app.post("/allWorkers", async (req, res) => {
-      const user = req.body;
-      const result = await workersCollection.insertOne(user);
-      res.status(201).json(result);
-    });
+
+    // Workers
 
     app.post("/allTasks", async (req, res) => {
       try {
         const tasksCollection = client.db("allTasksDB").collection("allTasks");
         const usersCollection = client.db("allUsersDb").collection("allUsers");
         const taskData = req.body;
-
-        console.log(taskData);
 
         // Fetch latest user data
         const buyer = await usersCollection.findOne({
@@ -158,6 +225,7 @@ async function run() {
         const paymentsCollection = client
           .db("paymentsDb")
           .collection("payments");
+
         const paymentData = {
           type_of_payment: "made",
           paid_by,
@@ -169,70 +237,86 @@ async function run() {
           date: new Date(),
         };
 
+        // Save payment record
         const result = await paymentsCollection.insertOne(paymentData);
-        res.json({ success: true, result });
+
+        // Increase coins in user account
         await usersCollection.updateOne(
-          { email: email },
-          { $inc: { coins: coins } }, // increments coins by purchased amount
-          { upsert: true } // creates user if not exist
+          { email },
+          { $inc: { coins } }, // increments coins by purchased amount
+          { upsert: true }
         );
+
+        // 🔔 Send notification
+        await createNotification({
+          message: `🎉 Congrats ${paid_by}, you have successfully purchased ${coins} coins with $${price}!`,
+          toEmail: email,
+          actionRoute: "/dashboard/worker-home", // where user can view balance
+        });
+
+        res.json({ success: true, result });
       } catch (error) {
         console.error("Save payment error:", error);
         res.status(500).json({ error: error.message });
       }
     });
 
-    app.post("/submissions/approve/:id", async (req, res) => {
-      const submissionId = req.params.id;
+    app.post(
+      "/submissions/approve/:id",
+      verifyFBToken,
+      verifyRoles(["buyer"]),
+      async (req, res) => {
+        const submissionId = req.params.id;
 
-      try {
-        const submission = await subCollection.findOne({
-          _id: new ObjectId(submissionId),
-        });
-        if (!submission)
-          return res.status(404).json({ message: "Submission not found" });
+        try {
+          const submission = await subCollection.findOne({
+            _id: new ObjectId(submissionId),
+          });
+          if (!submission)
+            return res.status(404).json({ message: "Submission not found" });
 
-        // 1. Add entry to payment collection
-        const paymentData = {
-          payment_type: "give",
-          worker_name: submission.worker_name,
-          task_title: submission.task_title,
-          coins: submission.payable_amount,
-          submission_date: submission.current_date,
-          approval_date: new Date(),
-          task_id: submission.task_id,
-          worker_email: submission.worker_email,
+          // 1. Add entry to payment collection
+          const paymentData = {
+            payment_type: "give",
+            worker_name: submission.worker_name,
+            task_title: submission.task_title,
+            coins: submission.payable_amount,
+            submission_date: submission.current_date,
+            approval_date: new Date(),
+            task_id: submission.task_id,
+            worker_email: submission.worker_email,
 
-          buyer_name: submission.buyer_name,
+            buyer_name: submission.buyer_name,
 
-          buyer_email: submission.buyer_email,
-        };
-        await paymentsCollection.insertOne(paymentData);
+            buyer_email: submission.buyer_email,
+          };
+          await paymentsCollection.insertOne(paymentData);
 
-        // 2. Update worker coins in allUsers collection
-        await usersCollection.updateOne(
-          { email: submission.worker_email },
-          { $inc: { coins: submission.payable_amount } }
-        );
+          // 2. Update worker coins in allUsers collection
+          await usersCollection.updateOne(
+            { email: submission.worker_email },
+            { $inc: { coins: submission.payable_amount } }
+          );
 
-        // 3. Update submission status to 'approved'
-        await subCollection.updateOne(
-          { _id: new ObjectId(submissionId) },
-          { $set: { status: "approved" } }
-        );
+          // 3. Update submission status to 'approved'
+          await subCollection.updateOne(
+            { _id: new ObjectId(submissionId) },
+            { $set: { status: "approved" } }
+          );
 
-        await createNotification({
-          message: `You earned ${submission.payable_amount} coins from ${submission.buyer_name} for completing ${submission.task_title}`,
-          toEmail: submission.worker_email,
-          actionRoute: "/dashboard",
-        });
+          await createNotification({
+            message: `You earned ${submission.payable_amount} coins from ${submission.buyer_name} for completing ${submission.task_title}`,
+            toEmail: submission.worker_email,
+            actionRoute: "/dashboard",
+          });
 
-        res.status(200).json({ message: "Submission approved successfully" });
-      } catch (err) {
-        console.error(err);
-        res.status(500).json({ message: "Approval failed" });
+          res.status(200).json({ message: "Submission approved successfully" });
+        } catch (err) {
+          console.error(err);
+          res.status(500).json({ message: "Approval failed" });
+        }
       }
-    });
+    );
 
     app.post("/allSubmits", async (req, res) => {
       try {
@@ -252,16 +336,17 @@ async function run() {
           { $inc: { currently_required_workers: -1 } }
         );
 
-         const notification = {
-        message: `${submission.worker_name} submitted work for your task "${task.task_title}"`,
-        toEmail: task.buyer_email, // notify the buyer
-        actionRoute: "/dashboard/buyer-home",
-        time: new Date(),
-        read: false,
-      };
+        const task = await tasksCollection.findOne({
+          _id: new ObjectId(submission.task_id),
+        });
 
-      await notificationsCollection.insertOne(notification);
-
+        if (task) {
+          await createNotification({
+            message: `${submission.worker_name} submitted work for your task "${task.task_title}"`,
+            toEmail: task.buyer_email,
+            actionRoute: "/dashboard",
+          });
+        }
 
         res.json({ success: true, result });
       } catch (error) {
@@ -306,64 +391,16 @@ async function run() {
 
         const result = await withdrawCollection.insertOne(withdrawal);
 
-         await createNotification({
-      message: `${worker_name} requested a withdrawal of ${withdrawal_coin} coins`,
-      toEmail:adminEmail, // or another user who should be notified
-      actionRoute: "/dashboard", // link to admin dashboard
-    });
-
+        await createNotification({
+          message: `${worker_name} requested a withdrawal of ${withdrawal_coin} coins`,
+          toEmail: adminEmail, // or another user who should be notified
+          actionRoute: "/dashboard", // link to admin dashboard
+        });
 
         res.json({ success: true, insertedId: result.insertedId });
       } catch (err) {
         console.error(err);
         res.status(500).json({ success: false, message: err.message });
-      }
-    });
-
-    // Create or update user by email (upsert)
-    // Upsert user in allUsers
-    // Users
-    // Create user if not exist
-    // Users
-    app.post("/allUsers", async (req, res) => {
-      try {
-        // User does not exist → create full document
-        await usersCollection.insertOne({
-          name: user.name,
-          email: user.email,
-          provider: user.provider,
-          photoURL: user.photoURL,
-          role: user.role || "worker",
-          coins: user.coins || 10,
-          created_at: new Date().toISOString(),
-          last_log_in: new Date().toISOString(),
-        });
-
-        res.status(201).json({ message: "New user created", result });
-      } catch (err) {
-        console.error("Error creating/updating user:", err);
-        res.status(500).json({ message: "Server error" });
-      }
-    });
-
-    // Workers
-    app.post("/allWorkers", async (req, res) => {
-      try {
-        await workersCollection.insertOne({
-          name: user.name,
-          email: user.email,
-          provider: user.provider,
-          photoURL: user.photoURL,
-          role: "worker",
-          coins: 10,
-          created_at: new Date().toISOString(),
-          last_log_in: new Date().toISOString(),
-        });
-
-        res.status(201).json({ message: "New worker created", result });
-      } catch (err) {
-        console.error("Error creating/updating worker:", err);
-        res.status(500).json({ message: "Server error" });
       }
     });
 
@@ -389,25 +426,6 @@ async function run() {
     });
 
     // Update last_log_in for an existing worker
-    app.patch("/allWorkers/:email", async (req, res) => {
-      try {
-        const email = req.params.email;
-
-        const result = await workersCollection.updateOne(
-          { email },
-          { $set: { last_log_in: new Date().toISOString() } }
-        );
-
-        if (result.matchedCount === 0) {
-          return res.status(404).json({ message: "Worker not found" });
-        }
-
-        res.json({ success: true, message: "Last login updated" });
-      } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: "Server error" });
-      }
-    });
 
     // Update a task by ID
     app.put("/allTasks/:id", async (req, res) => {
@@ -564,51 +582,63 @@ async function run() {
       }
     });
 
-    app.patch("/submissions/reject/:id", async (req, res) => {
-      const submissionId = req.params.id;
-      // Find the submission
-      const submission = await subCollection.findOne({
-        _id: new ObjectId(submissionId),
-      });
-      try {
-        if (!ObjectId.isValid(submissionId)) {
-          return res.status(400).json({ message: "Invalid submission ID" });
-        }
-
-        const result = await subCollection.updateOne(
-          { _id: new ObjectId(submissionId) },
-          { $set: { status: "rejected" } }
-        );
-        await tasksCollection.updateOne(
-          { _id: new ObjectId(submission.task_id) },
-          { $inc: { currently_required_workers: 1 } }
-        );
-        if (result.modifiedCount === 0) {
-          return res
-            .status(404)
-            .json({ message: "Submission not found or already rejected" });
-        }
-
-        await createNotification({
-          message: `Your submission for ${submission.task_title} was rejected by ${submission.buyer_name}`,
-          toEmail: submission.worker_email,
-          actionRoute: "/dashboard/worker-home",
+    app.patch(
+      "/submissions/reject/:id",
+      verifyFBToken,
+      verifyRoles(["buyer"]),
+      async (req, res) => {
+        const submissionId = req.params.id;
+        // Find the submission
+        const submission = await subCollection.findOne({
+          _id: new ObjectId(submissionId),
         });
+        try {
+          if (!ObjectId.isValid(submissionId)) {
+            return res.status(400).json({ message: "Invalid submission ID" });
+          }
 
-        res.json({
-          success: true,
-          message: "Submission rejected successfully",
-        });
-      } catch (err) {
-        console.error("Error rejecting submission:", err);
-        res.status(500).json({ message: "Failed to reject submission" });
+          const result = await subCollection.updateOne(
+            { _id: new ObjectId(submissionId) },
+            { $set: { status: "rejected" } }
+          );
+          await tasksCollection.updateOne(
+            { _id: new ObjectId(submission.task_id) },
+            { $inc: { currently_required_workers: 1 } }
+          );
+          if (result.modifiedCount === 0) {
+            return res
+              .status(404)
+              .json({ message: "Submission not found or already rejected" });
+          }
+
+          await createNotification({
+            message: `Your submission for ${submission.task_title} was rejected by ${submission.buyer_name}`,
+            toEmail: submission.worker_email,
+            actionRoute: "/dashboard/worker-home",
+          });
+
+          res.json({
+            success: true,
+            message: "Submission rejected successfully",
+          });
+        } catch (err) {
+          console.error("Error rejecting submission:", err);
+          res.status(500).json({ message: "Failed to reject submission" });
+        }
       }
-    });
+    );
 
-    app.get("/allUsers", async (req, res) => {
-      const users = await usersCollection.find().toArray();
-      res.send(users);
-    });
+    // all get
+
+    app.get(
+      "/allUsers",
+      verifyFBToken,
+      verifyRoles(["admin"]),
+      async (req, res) => {
+        const users = await usersCollection.find().toArray();
+        res.send(users);
+      }
+    );
 
     app.get("/best-workers", async (req, res) => {
       const bestWorkers = await workersCollection
@@ -619,7 +649,7 @@ async function run() {
       res.send(bestWorkers);
     });
 
-    app.get("/allUsers/:email/role", async (req, res) => {
+    app.get("/allUsers/:email/role", verifyFBToken, async (req, res) => {
       const email = req.params.email;
       const user = await usersCollection.findOne({ email });
 
@@ -630,7 +660,7 @@ async function run() {
       res.json({ role: user.role });
     });
 
-    app.get("/allUsers/:email", async (req, res) => {
+    app.get("/allUsers/:email", verifyFBToken, async (req, res) => {
       const user = await usersCollection.findOne({ email: req.params.email });
       if (!user) return res.status(404).json(null);
       res.json(user);
@@ -638,185 +668,313 @@ async function run() {
 
     // get allTasks
 
-    app.get("/allTasks", async (req, res) => {
-      const buyerEmail = req.query.buyer;
-      const query = buyerEmail ? { buyer_email: buyerEmail } : {};
-      const tasks = await tasksCollection.find(query).toArray();
-      res.json(tasks);
-    });
-    app.get("/allTasks/:id", async (req, res) => {
-      const id = req.params.id;
-      const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
-      res.json(task);
-    });
-    app.get("/allTasks/buyer/:email", async (req, res) => {
-      const buyerEmail = req.params.email;
-      const tasks = await tasksCollection
-        .find({ buyer_email: buyerEmail })
-        .toArray();
-      res.json(tasks);
-    });
-    // Assuming you have Express and a MongoDB collection set up
-    app.get("/payments", async (req, res) => {
-      try {
-        const payments = await paymentsCollection.find().toArray();
-        res.status(200).json(payments);
-      } catch (err) {
-        console.error("Failed to fetch payments:", err);
-        res.status(500).json({ message: "Failed to fetch payments" });
+    app.get(
+      "/allTasks",
+      verifyFBToken,
+
+      async (req, res) => {
+        const tasks = await tasksCollection.find().toArray();
+        res.json(tasks);
       }
-    });
-
-    app.get("/payments/:email", async (req, res) => {
-      try {
-        const email = req.params.email;
-        const paymentsCollection = client
-          .db("paymentsDb")
-          .collection("payments");
-
-        const payments = await paymentsCollection
-          .find({ email })
-          .sort({ date: -1 }) // latest payments first
-          .toArray();
-
-        res.json(payments);
-      } catch (error) {
-        console.error("Fetch payments error:", error);
-        res.status(500).json({ error: error.message });
-      }
-    });
-
-    app.get("/allSubmits/:taskId/:workerEmail", async (req, res) => {
-      try {
-        const { taskId, workerEmail } = req.params; // get both from URL params
-
-        if (!workerEmail) {
-          return res.status(400).json({ message: "Worker email required" });
-        }
-
-        const submission = await subCollection.findOne({
-          task_id: taskId,
-          worker_email: workerEmail,
-          status: "pending",
-        });
-
-        res.json({ submitted: !!submission });
-      } catch (error) {
-        console.error("Error fetching submission:", error);
-        res.status(500).json({ success: false, message: error.message });
-      }
-    });
-    // Get all submissions for a worker
-    app.get("/mySubmits/:workerEmail", async (req, res) => {
-      try {
-        const { workerEmail } = req.params;
-
-        const submissions = await subCollection
-          .find({ worker_email: workerEmail })
-          .sort({ current_date: -1 }) // newest first
-          .toArray();
-
-        res.json(submissions);
-      } catch (error) {
-        console.error("Error fetching submissions:", error);
-        res.status(500).json({ success: false, message: error.message });
-      }
-    });
-
-    app.get("/allWithdraws", async (req, res) => {
-      const withDraws = await withdrawCollection.find().toArray();
-      res.send(withDraws);
-    });
-
-    app.get("/submissions", async (req, res) => {
-      try {
-        const submissions = await subCollection.find({}).toArray();
-        res.status(200).json(submissions);
-      } catch (err) {
-        console.error(err);
-        res.status(500).json({ message: "Failed to fetch submissions" });
-      }
-    });
-
-    app.delete("/allTasks/:id", async (req, res) => {
-      try {
+    );
+    app.get(
+      "/allTasks/:id",
+      verifyFBToken,
+      verifyRoles(["worker"]),
+      async (req, res) => {
         const id = req.params.id;
-
-        // Find the task before deleting
         const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
-        if (!task) {
-          return res.status(404).json({ message: "Task not found" });
-        }
-
-        // Delete the task
-        const result = await tasksCollection.deleteOne({
-          _id: new ObjectId(id),
-        });
-        if (result.deletedCount === 0) {
-          return res.status(404).json({ message: "Failed to delete task" });
-        }
-
-        // Refund coins (get user from allUsers)
-        const refundAmount = Number(task.total_payable_amount) || 0;
-        const buyerEmail = task.buyer_email;
-
-        const user = await usersCollection.findOne({ email: buyerEmail });
-        if (!user) {
-          return res.status(404).json({ message: "User not found for refund" });
-        }
-
-        const updatedCoins = (user.coins || 0) + refundAmount;
-
-        await usersCollection.updateOne(
-          { email: buyerEmail },
-          { $set: { coins: updatedCoins } }
-        );
-
-        await createNotification({
-      message: `Your task "${task.task_title}" was deleted by Admin. Refunded ${refundAmount} coins.`,
-      toEmail: buyerEmail,
-      actionRoute: "/dashboard/my-tasks",
-    });
-
-        res.json({
-          message: "Task deleted successfully, coins refunded",
-          refund: refundAmount,
-          updatedCoins,
-        });
-      } catch (error) {
-        console.error("Error deleting task:", error);
-        res.status(500).json({ message: "Failed to delete task" });
+        res.json(task);
       }
-    });
-
-    app.delete("/allUsers/:id", async (req, res) => {
-      try {
-        const userId = req.params.id;
-
-        if (!ObjectId.isValid(userId)) {
-          return res
-            .status(400)
-            .json({ success: false, message: "Invalid user ID" });
-        }
-
-        const result = await usersCollection.deleteOne({
-          _id: new ObjectId(userId),
-        });
-
-        if (result.deletedCount === 0) {
-          return res
-            .status(404)
-            .json({ success: false, message: "User not found" });
-        }
-
-        res.json({ success: true, message: "User deleted successfully" });
-      } catch (error) {
-        console.error("Error deleting user:", error);
-        res.status(500).json({ success: false, message: "Server error" });
+    );
+    app.get(
+      "/allTasks/buyer/:email",
+      verifyFBToken,
+      verifyRoles(["buyer"]),
+      async (req, res) => {
+        const buyerEmail = req.params.email;
+        const tasks = await tasksCollection
+          .find({ buyer_email: buyerEmail })
+          .toArray();
+        res.json(tasks);
       }
-    });
+    );
+    // Assuming you have Express and a MongoDB collection set up
+    app.get(
+      "/payments",
+      verifyFBToken,
+      verifyRoles(["admin"]),
+      async (req, res) => {
+        try {
+          const payments = await paymentsCollection.find().toArray();
+          res.status(200).json(payments);
+        } catch (err) {
+          console.error("Failed to fetch payments:", err);
+          res.status(500).json({ message: "Failed to fetch payments" });
+        }
+      }
+    );
 
-    app.get("/notifications", async (req, res) => {
+    app.get(
+      "/payments/buyer/:email",
+      verifyFBToken,
+      verifyRoles(["buyer"]),
+      async (req, res) => {
+        try {
+          const email = req.params.email;
+
+          // Ensure users can only see their own payments
+          if (email !== req.decoded.email) {
+            return res
+              .status(403)
+              .json({ message: "Forbidden: cannot access others' payments" });
+          }
+
+          const paymentsCollection = client
+            .db("paymentsDb")
+            .collection("payments");
+          const payments = await paymentsCollection
+            .find({ email })
+            .sort({ date: -1 })
+            .toArray();
+          res.json(payments);
+        } catch (error) {
+          console.error(error);
+          res.status(500).json({ message: "Server error" });
+        }
+      }
+    );
+
+    app.get(
+      "/allSubmits/:taskId/:workerEmail",
+      verifyFBToken,
+      verifyRoles(["worker"]),
+      async (req, res) => {
+        try {
+          const { taskId, workerEmail } = req.params; // get both from URL params
+
+          if (!workerEmail) {
+            return res.status(400).json({ message: "Worker email required" });
+          }
+
+          const submission = await subCollection.findOne({
+            task_id: taskId,
+            worker_email: workerEmail,
+          });
+
+          res.json({ submitted: !!submission });
+        } catch (error) {
+          console.error("Error fetching submission:", error);
+          res.status(500).json({ success: false, message: error.message });
+        }
+      }
+    );
+    // Get all submissions for a worker
+    app.get(
+      "/mySubmits/:workerEmail",
+      verifyFBToken,
+      verifyRoles(["worker"]),
+      async (req, res) => {
+        try {
+          const  workerEmail  = req.params.workerEmail;
+
+          const submissions = await subCollection
+            .find({ worker_email: workerEmail })
+            .sort({ current_date: -1 }) // newest first
+            .toArray();
+
+          res.json(submissions);
+        } catch (error) {
+          console.error("Error fetching submissions:", error);
+          res.status(500).json({ success: false, message: error.message });
+        }
+      }
+    );
+
+    // GET /submissions/buyer/:buyerEmail
+    app.get(
+      "/submissions/buyer/:buyerEmail",
+      verifyFBToken,
+      verifyRoles(["buyer"]), // only the buyer themselves  can access
+      async (req, res) => {
+        try {
+          const buyerEmail = req.params.buyerEmail;
+
+          // Ensure buyer can only access their own submissions
+          if (buyerEmail !== req.decoded.email) {
+            return res.status(403).json({
+              message: "Forbidden: cannot access others' submissions",
+            });
+          }
+
+          const subCollection = client
+            .db("submissionDB")
+            .collection("allSubmits");
+
+          // Fetch all submissions where buyer_email matches
+          const submissions = await subCollection
+            .find({ buyer_email: buyerEmail })
+            .sort({ current_date: -1 }) // latest first
+            .toArray();
+
+          res.json(submissions);
+        } catch (error) {
+          console.error("Error fetching buyer submissions:", error);
+          res.status(500).json({ message: "Server error" });
+        }
+      }
+    );
+
+    app.get(
+      "/allWithdraws",
+      verifyFBToken,
+      verifyRoles(["admin"]),
+      async (req, res) => {
+        const withDraws = await withdrawCollection.find().toArray();
+        res.send(withDraws);
+      }
+    );
+    // GET /allWithdraws/workers/:email
+    app.get(
+      "/allWithdraws/workers/:email",
+      verifyFBToken,
+      verifyRoles(["worker"]),
+      async (req, res) => {
+        try {
+          const workerEmail = req.params.email;
+
+          // Ensure the worker can only access their own withdrawals
+          if (workerEmail !== req.decoded.email) {
+            return res
+              .status(403)
+              .json({
+                message: "Forbidden: cannot access others' withdrawals",
+              });
+          }
+
+          const withdrawCollection = client
+            .db("withdrawDB")
+            .collection("allWithdraws");
+
+          const withdrawals = await withdrawCollection
+            .find({ worker_email: workerEmail })
+            .sort({ withdraw_date: -1 }) // newest first
+            .toArray();
+
+          res.json(withdrawals);
+        } catch (error) {
+          console.error("Error fetching withdrawals:", error);
+          res.status(500).json({ message: "Server error" });
+        }
+      }
+    );
+
+    app.get(
+      "/submissions",
+      verifyFBToken,
+      verifyRoles(["admin"]),
+      async (req, res) => {
+        try {
+          const submissions = await subCollection.find({}).toArray();
+          res.status(200).json(submissions);
+        } catch (err) {
+          console.error(err);
+          res.status(500).json({ message: "Failed to fetch submissions" });
+        }
+      }
+    );
+
+    app.delete(
+      "/allTasks/:id",
+      verifyFBToken,
+      verifyRoles(["admin", "buyer"]),
+      async (req, res) => {
+        try {
+          const id = req.params.id;
+
+          // Find the task before deleting
+          const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
+          if (!task) {
+            return res.status(404).json({ message: "Task not found" });
+          }
+
+          // Delete the task
+          const result = await tasksCollection.deleteOne({
+            _id: new ObjectId(id),
+          });
+          if (result.deletedCount === 0) {
+            return res.status(404).json({ message: "Failed to delete task" });
+          }
+
+          // Refund coins (get user from allUsers)
+          const refundAmount = Number(task.total_payable_amount) || 0;
+          const buyerEmail = task.buyer_email;
+
+          const user = await usersCollection.findOne({ email: buyerEmail });
+          if (!user) {
+            return res
+              .status(404)
+              .json({ message: "User not found for refund" });
+          }
+
+          const updatedCoins = (user.coins || 0) + refundAmount;
+
+          await usersCollection.updateOne(
+            { email: buyerEmail },
+            { $set: { coins: updatedCoins } }
+          );
+
+          await createNotification({
+            message: `Your task "${task.task_title}" has been deleted. Refunded ${refundAmount} coins.`,
+            toEmail: buyerEmail,
+            actionRoute: "/dashboard/my-tasks",
+          });
+
+          res.json({
+            message: "Task deleted successfully, coins refunded",
+            refund: refundAmount,
+            updatedCoins,
+          });
+        } catch (error) {
+          console.error("Error deleting task:", error);
+          res.status(500).json({ message: "Failed to delete task" });
+        }
+      }
+    );
+
+    app.delete(
+      "/allUsers/:id",
+      verifyFBToken,
+      verifyRoles(["admin"]),
+      async (req, res) => {
+        try {
+          const userId = req.params.id;
+
+          if (!ObjectId.isValid(userId)) {
+            return res
+              .status(400)
+              .json({ success: false, message: "Invalid user ID" });
+          }
+
+          const result = await usersCollection.deleteOne({
+            _id: new ObjectId(userId),
+          });
+
+          if (result.deletedCount === 0) {
+            return res
+              .status(404)
+              .json({ success: false, message: "User not found" });
+          }
+
+          res.json({ success: true, message: "User deleted successfully" });
+        } catch (error) {
+          console.error("Error deleting user:", error);
+          res.status(500).json({ success: false, message: "Server error" });
+        }
+      }
+    );
+
+    app.get("/notifications", verifyFBToken, async (req, res) => {
       const { toEmail } = req.query;
       const notifications = await notificationsCollection
         .find({ toEmail })
@@ -853,4 +1011,3 @@ app.get("/", (req, res) => {
 server.listen(port, () => {
   console.log(`WorkNest server is running on port ${port} with Socket.IO`);
 });
-
