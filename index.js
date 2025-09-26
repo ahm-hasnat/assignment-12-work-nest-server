@@ -145,7 +145,7 @@ async function run() {
       // Update last login / info
       const result = await usersCollection.updateOne(
         { email: user.email },
-        { $set: { ...user, last_log_in: new Date().toISOString() } }
+        { $set: {  last_log_in: new Date().toISOString() } }
       );
       res.status(200).json({ message: "User updated", result });
     } else {
