@@ -101,6 +101,7 @@ async function run() {
         return res.status(401).send({ message: "unauthorized access" });
       }
       const token = authHeader.split(" ")[1];
+      
       if (!token) {
         return res.status(401).send({ message: "unauthorized access" });
       }
@@ -117,6 +118,7 @@ async function run() {
 
     const verifyRoles = (roles) => {
       return async (req, res, next) => {
+        console.log(roles);
         const email = req.decoded?.email;
         if (!email) return res.status(401).json({ message: "Unauthorized" });
 
@@ -126,31 +128,45 @@ async function run() {
         }
 
         req.user = user;
+        
         next();
       };
     };
 
-    app.post("/allUsers", async (req, res) => {
-      try {
-        const user = req.body;
+   app.post("/allUsers", async (req, res) => {
+  try {
+    const user = req.body;
+    console.log(user);
 
-        // Insert new user
-        const result = await usersCollection.insertOne(user);
-        // 🔔 Send welcome notification to the user
-        await createNotification({
-          message: `🎉 Congratulations ${
-            user.name
-          }! Your account has been created. You got ${user.coins || 10} coins!`,
-          toEmail: user.email,
-          actionRoute: "/dashboard",
-        });
+    // Check if user exists
+    const existingUser = await usersCollection.findOne({ email: user.email });
 
-        res.status(201).json({ message: "New user created", result });
-      } catch (err) {
-        console.error("Error creating user:", err);
-        res.status(500).json({ message: "Server error" });
-      }
-    });
+    if (existingUser) {
+      // Update last login / info
+      const result = await usersCollection.updateOne(
+        { email: user.email },
+        { $set: { ...user, last_log_in: new Date().toISOString() } }
+      );
+      res.status(200).json({ message: "User updated", result });
+    } else {
+      // Insert new user
+      const result = await usersCollection.insertOne(user);
+
+      // Send welcome notification
+      await createNotification({
+        message: `🎉 Congratulations ${user.name}! Your account has been created. You got ${user.coins || 10} coins!`,
+        toEmail: user.email,
+        actionRoute: "/dashboard",
+      });
+
+      res.status(201).json({ message: "New user created", result });
+    }
+  } catch (err) {
+    console.error("Error creating/updating user:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 
     // Workers
 
@@ -671,7 +687,7 @@ async function run() {
     app.get(
       "/allTasks",
       verifyFBToken,
-
+        verifyRoles(["admin","worker"]),
       async (req, res) => {
         const tasks = await tasksCollection.find().toArray();
         res.json(tasks);
