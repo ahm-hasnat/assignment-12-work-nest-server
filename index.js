@@ -29,7 +29,6 @@ const adminEmail = process.env.ADMIN_EMAIL;
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASSWORD}@cluster0.xkximz0.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -57,21 +56,19 @@ async function run() {
       .db("notificationsDb")
       .collection("notifications");
 
-    io.on("connection", (socket) => {
-      console.log("User connected:", socket.id);
+    // ......................................!.............................................
 
-      // Join room by email
+    io.on("connection", (socket) => {
+     
       socket.on("join", (email) => {
         console.log(`${email} joined`);
         socket.join(email);
       });
 
       socket.on("disconnect", () => {
-        console.log("User disconnected:", socket.id);
+        // console.log("User disconnected:", socket.id);
       });
     });
-
-    // Backend function
     const createNotification = async ({ message, toEmail, actionRoute }) => {
       const notification = {
         message,
@@ -81,19 +78,18 @@ async function run() {
         read: false,
       };
 
-      // Save to MongoDB
       await notificationsCollection.insertOne(notification);
-
-      // Delay slightly to ensure socket has joined the room
       setTimeout(async () => {
         const clients = await io.in(toEmail).fetchSockets();
         if (clients.length > 0) {
           io.to(toEmail).emit("new_notification", notification);
         }
-      }, 50); // 50ms delay ensures client has joined
+      }, 50);
 
       return notification;
     };
+
+    // ........................Verify Token,Role............................................
 
     const verifyFBToken = async (req, res, next) => {
       const authHeader = req.headers.authorization;
@@ -101,7 +97,8 @@ async function run() {
         return res.status(401).send({ message: "unauthorized access" });
       }
       const token = authHeader.split(" ")[1];
-      
+      // console.log(token);
+
       if (!token) {
         return res.status(401).send({ message: "unauthorized access" });
       }
@@ -118,7 +115,7 @@ async function run() {
 
     const verifyRoles = (roles) => {
       return async (req, res, next) => {
-        console.log(roles);
+       
         const email = req.decoded?.email;
         if (!email) return res.status(401).json({ message: "Unauthorized" });
 
@@ -128,47 +125,55 @@ async function run() {
         }
 
         req.user = user;
-        
+
         next();
       };
     };
+    // .................................!................................................
 
-   app.post("/allUsers", async (req, res) => {
-  try {
-    const user = req.body;
-    console.log(user);
+    // ..............................All Post..............................................
 
-    // Check if user exists
-    const existingUser = await usersCollection.findOne({ email: user.email });
+    app.post("/allUsers", async (req, res) => {
+      try {
+        const user = req.body;
+        console.log(user);
 
-    if (existingUser) {
-      // Update last login / info
-      const result = await usersCollection.updateOne(
-        { email: user.email },
-        { $set: {  last_log_in: new Date().toISOString() } }
-      );
-      res.status(200).json({ message: "User updated", result });
-    } else {
-      // Insert new user
-      const result = await usersCollection.insertOne(user);
+        
+        const existingUser = await usersCollection.findOne({
+          email: user.email,
+        });
 
-      // Send welcome notification
-      await createNotification({
-        message: `🎉 Congratulations ${user.name}! Your account has been created. You got ${user.coins || 10} coins!`,
-        toEmail: user.email,
-        actionRoute: "/dashboard",
-      });
+        if (existingUser) {
+         
+          const result = await usersCollection.updateOne(
+            { email: user.email },
+            { $set: { last_log_in: new Date().toISOString() } }
+          );
+          res.status(200).json({ message: "User updated", result });
+        } else {
+         
+          const result = await usersCollection.insertOne(user);
 
-      res.status(201).json({ message: "New user created", result });
-    }
-  } catch (err) {
-    console.error("Error creating/updating user:", err);
-    res.status(500).json({ message: "Server error" });
-  }
-});
+         
+          await createNotification({
+            message: `🎉 Congratulations ${
+              user.name
+            }! Your account has been created. You got ${
+              user.coins || 10
+            } coins!`,
+            toEmail: user.email,
+            actionRoute: "/dashboard",
+          });
 
+          res.status(201).json({ message: "New user created", result });
+        }
+      } catch (err) {
+        console.error("Error creating/updating user:", err);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
 
-    // Workers
+   
 
     app.post("/allTasks", async (req, res) => {
       try {
@@ -176,7 +181,6 @@ async function run() {
         const usersCollection = client.db("allUsersDb").collection("allUsers");
         const taskData = req.body;
 
-        // Fetch latest user data
         const buyer = await usersCollection.findOne({
           email: taskData.buyer_email,
         });
@@ -214,7 +218,7 @@ async function run() {
 
     app.post("/create-payment-intent", async (req, res) => {
       try {
-        const { amount } = req.body; // amount in cents
+        const { amount } = req.body; 
         if (!amount || amount <= 0) {
           return res.status(400).json({ error: "Invalid amount" });
         }
@@ -253,21 +257,21 @@ async function run() {
           date: new Date(),
         };
 
-        // Save payment record
+        
         const result = await paymentsCollection.insertOne(paymentData);
 
-        // Increase coins in user account
+        
         await usersCollection.updateOne(
           { email },
-          { $inc: { coins } }, // increments coins by purchased amount
+          { $inc: { coins } }, 
           { upsert: true }
         );
 
-        // 🔔 Send notification
+        
         await createNotification({
           message: `🎉 Congrats ${paid_by}, you have successfully purchased ${coins} coins with $${price}!`,
           toEmail: email,
-          actionRoute: "/dashboard/worker-home", // where user can view balance
+          actionRoute: "/dashboard/worker-home", 
         });
 
         res.json({ success: true, result });
@@ -291,7 +295,7 @@ async function run() {
           if (!submission)
             return res.status(404).json({ message: "Submission not found" });
 
-          // 1. Add entry to payment collection
+         
           const paymentData = {
             payment_type: "give",
             worker_name: submission.worker_name,
@@ -308,13 +312,13 @@ async function run() {
           };
           await paymentsCollection.insertOne(paymentData);
 
-          // 2. Update worker coins in allUsers collection
+          
           await usersCollection.updateOne(
             { email: submission.worker_email },
             { $inc: { coins: submission.payable_amount } }
           );
 
-          // 3. Update submission status to 'approved'
+          
           await subCollection.updateOne(
             { _id: new ObjectId(submissionId) },
             { $set: { status: "approved" } }
@@ -344,9 +348,9 @@ async function run() {
           status: "pending",
         };
 
-        // Insert the submission
+        
         const result = await subCollection.insertOne(submissionData);
-        // 4. Decrease required_workers in allTasks
+        
         await tasksCollection.updateOne(
           { _id: new ObjectId(submission.task_id) },
           { $inc: { currently_required_workers: -1 } }
@@ -371,7 +375,7 @@ async function run() {
       }
     });
 
-    // POST /withdrawals
+    
     app.post("/withdrawals", async (req, res) => {
       try {
         const {
@@ -393,7 +397,7 @@ async function run() {
           return res.status(400).json({ message: "All fields are required" });
         }
 
-        // Insert withdrawal request
+        
         const withdrawal = {
           worker_email,
           worker_name,
@@ -409,8 +413,8 @@ async function run() {
 
         await createNotification({
           message: `${worker_name} requested a withdrawal of ${withdrawal_coin} coins`,
-          toEmail: adminEmail, // or another user who should be notified
-          actionRoute: "/dashboard", // link to admin dashboard
+          toEmail: adminEmail, 
+          actionRoute: "/dashboard", 
         });
 
         res.json({ success: true, insertedId: result.insertedId });
@@ -419,51 +423,31 @@ async function run() {
         res.status(500).json({ success: false, message: err.message });
       }
     });
+    // ................................!....................................................
 
-    // Update last_log_in for an existing user
-    app.patch("/allUsers/:email", async (req, res) => {
-      try {
-        const email = req.params.email;
+    //...............................All Put...............................................
 
-        const result = await usersCollection.updateOne(
-          { email },
-          { $set: { last_log_in: new Date().toISOString() } }
-        );
-
-        if (result.matchedCount === 0) {
-          return res.status(404).json({ message: "User not found" });
-        }
-
-        res.json({ success: true, message: "Last login updated" });
-      } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: "Server error" });
-      }
-    });
-
-    // Update last_log_in for an existing worker
-
-    // Update a task by ID
+    
     app.put("/allTasks/:id", async (req, res) => {
       try {
         const id = req.params.id;
         const { task_title, task_detail, currently_required_workers } =
           req.body;
 
-        // Validate task ID
+       
         if (!ObjectId.isValid(id)) {
           return res.status(400).json({ message: "Invalid task ID" });
         }
 
-        // Fetch task
+       
         const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
         if (!task) return res.status(404).json({ message: "Task not found" });
 
-        // Fetch user
+       
         const user = await usersCollection.findOne({ email: task.buyer_email });
         if (!user) return res.status(404).json({ message: "User not found" });
 
-        // Convert numbers
+      
         const oldRequiredWorkers = Number(task.required_workers || 0);
         const oldCurrentlyRequired = Number(
           task.currently_required_workers || 0
@@ -471,26 +455,25 @@ async function run() {
         const payablePerWorker = Number(task.payable_amount || 0);
         const oldTotalPayable = Number(task.total_payable_amount || 0);
 
-        // Workers already submitted tasks
+        
         const submittedWorkers = oldRequiredWorkers - oldCurrentlyRequired;
 
-        // New total required workers after buyer update
+       
         const desiredCurrentlyRequired = Number(
           currently_required_workers || oldCurrentlyRequired
         );
         const newRequiredWorkers = submittedWorkers + desiredCurrentlyRequired;
 
-        // Calculate differences
-        const workerDiff = newRequiredWorkers - oldRequiredWorkers; // change in total required workers
-        const newTotalPayable = newRequiredWorkers * payablePerWorker; // new total coins
-        const coinDiff = newTotalPayable - oldTotalPayable; // how coins should change
-
-        // Check if user has enough coins if increasing
+       
+        const workerDiff = newRequiredWorkers - oldRequiredWorkers; 
+        const newTotalPayable = newRequiredWorkers * payablePerWorker; 
+        const coinDiff = newTotalPayable - oldTotalPayable; 
+       
         if (coinDiff > 0 && user.coins < coinDiff) {
           return res.status(400).json({ message: "Insufficient coins" });
         }
 
-        // Update task atomically
+      
         const updateData = {
           task_title,
           task_detail,
@@ -506,7 +489,7 @@ async function run() {
           }
         );
 
-        // Update user coins if needed
+      
         if (coinDiff !== 0) {
           await usersCollection.updateOne(
             { email: task.buyer_email },
@@ -536,7 +519,7 @@ async function run() {
           return res.status(400).json({ message: "Invalid withdrawal ID" });
         }
 
-        // Find the withdrawal request
+        
         const withdraw = await withdrawCollection.findOne({
           _id: new ObjectId(id),
         });
@@ -547,7 +530,7 @@ async function run() {
         }
 
         if (status === "approved") {
-          // Deduct coins from user
+         
           const user = await usersCollection.findOne({
             email: withdraw.worker_email,
           });
@@ -555,13 +538,13 @@ async function run() {
             return res.status(404).json({ message: "User not found" });
           }
 
-          // Deduct coins
+        
           await usersCollection.updateOne(
             { email: withdraw.worker_email },
             { $inc: { coins: -withdraw.withdrawal_coin } }
           );
 
-          // Add payment record
+          
           const paymentData = {
             type_of_payment: "get",
             worker_email: withdraw.worker_email,
@@ -583,7 +566,7 @@ async function run() {
           actionRoute: "/dashboard",
         });
 
-        // Update withdrawal status
+       
         await withdrawCollection.updateOne(
           { _id: new ObjectId(id) },
           { $set: { status } }
@@ -597,6 +580,53 @@ async function run() {
         res.status(500).json({ message: "Server error" });
       }
     });
+    // ....................................!................................................
+
+    //...................................All Patch...........................................
+
+   
+    app.patch("/allUsers/:email", async (req, res) => {
+      try {
+        const email = req.params.email;
+        const { role } = req.body;
+
+        const result = await usersCollection.updateOne(
+          { email },
+          { $set: { last_log_in: new Date().toISOString() } }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ message: "User not found" });
+        }
+
+        res.json({ success: true, message: "Last login updated" });
+      } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    app.patch("/allUsers/:email/role", async (req, res) => {
+      try {
+        const email = req.params.email;
+        const { role } = req.body; 
+
+        if (!role) return res.status(400).json({ message: "Role is required" });
+
+        const result = await usersCollection.updateOne(
+          { email },
+          { $set: { role } }
+        );
+
+        if (result.matchedCount === 0)
+          return res.status(404).json({ message: "User not found" });
+
+        res.json({ success: true, message: "Role updated successfully" });
+      } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
 
     app.patch(
       "/submissions/reject/:id",
@@ -604,7 +634,7 @@ async function run() {
       verifyRoles(["buyer"]),
       async (req, res) => {
         const submissionId = req.params.id;
-        // Find the submission
+       
         const submission = await subCollection.findOne({
           _id: new ObjectId(submissionId),
         });
@@ -643,8 +673,9 @@ async function run() {
         }
       }
     );
+    // ...............................!.....................................................
 
-    // all get
+    //...........................All get..............................................
 
     app.get(
       "/allUsers",
@@ -659,7 +690,7 @@ async function run() {
     app.get("/best-workers", async (req, res) => {
       const bestWorkers = await workersCollection
         .find({ role: "worker" })
-        .sort({ coins: -1 }) // sort descending
+        .sort({ coins: -1 }) 
         .limit(6)
         .toArray();
       res.send(bestWorkers);
@@ -682,12 +713,12 @@ async function run() {
       res.json(user);
     });
 
-    // get allTasks
+   
 
     app.get(
       "/allTasks",
       verifyFBToken,
-        verifyRoles(["admin","worker"]),
+      verifyRoles(["admin", "worker"]),
       async (req, res) => {
         const tasks = await tasksCollection.find().toArray();
         res.json(tasks);
@@ -715,7 +746,7 @@ async function run() {
         res.json(tasks);
       }
     );
-    // Assuming you have Express and a MongoDB collection set up
+   
     app.get(
       "/payments",
       verifyFBToken,
@@ -739,7 +770,7 @@ async function run() {
         try {
           const email = req.params.email;
 
-          // Ensure users can only see their own payments
+         
           if (email !== req.decoded.email) {
             return res
               .status(403)
@@ -767,7 +798,7 @@ async function run() {
       verifyRoles(["worker"]),
       async (req, res) => {
         try {
-          const { taskId, workerEmail } = req.params; // get both from URL params
+          const { taskId, workerEmail } = req.params; 
 
           if (!workerEmail) {
             return res.status(400).json({ message: "Worker email required" });
@@ -785,18 +816,18 @@ async function run() {
         }
       }
     );
-    // Get all submissions for a worker
+    
     app.get(
       "/mySubmits/:workerEmail",
       verifyFBToken,
       verifyRoles(["worker"]),
       async (req, res) => {
         try {
-          const  workerEmail  = req.params.workerEmail;
+          const workerEmail = req.params.workerEmail;
 
           const submissions = await subCollection
             .find({ worker_email: workerEmail })
-            .sort({ current_date: -1 }) // newest first
+            .sort({ current_date: -1 }) 
             .toArray();
 
           res.json(submissions);
@@ -807,16 +838,16 @@ async function run() {
       }
     );
 
-    // GET /submissions/buyer/:buyerEmail
+   
     app.get(
       "/submissions/buyer/:buyerEmail",
       verifyFBToken,
-      verifyRoles(["buyer"]), // only the buyer themselves  can access
+      verifyRoles(["buyer"]), 
       async (req, res) => {
         try {
           const buyerEmail = req.params.buyerEmail;
 
-          // Ensure buyer can only access their own submissions
+          
           if (buyerEmail !== req.decoded.email) {
             return res.status(403).json({
               message: "Forbidden: cannot access others' submissions",
@@ -827,10 +858,10 @@ async function run() {
             .db("submissionDB")
             .collection("allSubmits");
 
-          // Fetch all submissions where buyer_email matches
+          
           const submissions = await subCollection
             .find({ buyer_email: buyerEmail })
-            .sort({ current_date: -1 }) // latest first
+            .sort({ current_date: -1 }) 
             .toArray();
 
           res.json(submissions);
@@ -850,7 +881,7 @@ async function run() {
         res.send(withDraws);
       }
     );
-    // GET /allWithdraws/workers/:email
+    
     app.get(
       "/allWithdraws/workers/:email",
       verifyFBToken,
@@ -859,13 +890,11 @@ async function run() {
         try {
           const workerEmail = req.params.email;
 
-          // Ensure the worker can only access their own withdrawals
+         
           if (workerEmail !== req.decoded.email) {
-            return res
-              .status(403)
-              .json({
-                message: "Forbidden: cannot access others' withdrawals",
-              });
+            return res.status(403).json({
+              message: "Forbidden: cannot access others' withdrawals",
+            });
           }
 
           const withdrawCollection = client
@@ -874,7 +903,7 @@ async function run() {
 
           const withdrawals = await withdrawCollection
             .find({ worker_email: workerEmail })
-            .sort({ withdraw_date: -1 }) // newest first
+            .sort({ withdraw_date: -1 }) 
             .toArray();
 
           res.json(withdrawals);
@@ -900,6 +929,10 @@ async function run() {
       }
     );
 
+    // .....................................!...............................................
+
+    // ..................................All Delete.......................................
+
     app.delete(
       "/allTasks/:id",
       verifyFBToken,
@@ -908,13 +941,13 @@ async function run() {
         try {
           const id = req.params.id;
 
-          // Find the task before deleting
+          
           const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
           if (!task) {
             return res.status(404).json({ message: "Task not found" });
           }
 
-          // Delete the task
+        
           const result = await tasksCollection.deleteOne({
             _id: new ObjectId(id),
           });
@@ -922,8 +955,8 @@ async function run() {
             return res.status(404).json({ message: "Failed to delete task" });
           }
 
-          // Refund coins (get user from allUsers)
-          const refundAmount = Number(task.total_payable_amount) || 0;
+          
+          const refundAmount = Number(task.payable_amount * task.currently_required_workers) || 0;
           const buyerEmail = task.buyer_email;
 
           const user = await usersCollection.findOne({ email: buyerEmail });
@@ -989,6 +1022,9 @@ async function run() {
         }
       }
     );
+    // .........................................!............................................
+
+    // ...................................notifications.....................................
 
     app.get("/notifications", verifyFBToken, async (req, res) => {
       const { toEmail } = req.query;
@@ -1007,6 +1043,8 @@ async function run() {
       );
       res.json({ success: true });
     });
+
+    //..................................end..................................................
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
