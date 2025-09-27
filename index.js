@@ -40,7 +40,7 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
+    // await client.connect();
 
     const workersCollection = client
       .db("bestWorkersDb")
@@ -61,7 +61,7 @@ async function run() {
     io.on("connection", (socket) => {
      
       socket.on("join", (email) => {
-        console.log(`${email} joined`);
+        // console.log(`${email} joined`);
         socket.join(email);
       });
 
@@ -136,7 +136,7 @@ async function run() {
     app.post("/allUsers", async (req, res) => {
       try {
         const user = req.body;
-        console.log(user);
+        // console.log(user);
 
         
         const existingUser = await usersCollection.findOne({
@@ -168,7 +168,7 @@ async function run() {
           res.status(201).json({ message: "New user created", result });
         }
       } catch (err) {
-        console.error("Error creating/updating user:", err);
+        // console.error("Error creating/updating user:", err);
         res.status(500).json({ message: "Server error" });
       }
     });
@@ -211,7 +211,7 @@ async function run() {
         const result = await tasksCollection.insertOne(newTask);
         res.send(result);
       } catch (error) {
-        console.error(error);
+        // console.error(error);
         res.status(500).send({ message: "Failed to add task" });
       }
     });
@@ -231,7 +231,7 @@ async function run() {
 
         res.json({ clientSecret: paymentIntent.client_secret });
       } catch (error) {
-        console.error("Stripe create-payment-intent error:", error);
+        // console.error("Stripe create-payment-intent error:", error);
         res.status(500).json({ error: error.message });
       }
     });
@@ -276,7 +276,7 @@ async function run() {
 
         res.json({ success: true, result });
       } catch (error) {
-        console.error("Save payment error:", error);
+        // console.error("Save payment error:", error);
         res.status(500).json({ error: error.message });
       }
     });
@@ -332,7 +332,7 @@ async function run() {
 
           res.status(200).json({ message: "Submission approved successfully" });
         } catch (err) {
-          console.error(err);
+          // console.error(err);
           res.status(500).json({ message: "Approval failed" });
         }
       }
@@ -370,7 +370,7 @@ async function run() {
 
         res.json({ success: true, result });
       } catch (error) {
-        console.error("Error saving submission:", error);
+        // console.error("Error saving submission:", error);
         res.status(500).json({ success: false, message: error.message });
       }
     });
@@ -419,7 +419,7 @@ async function run() {
 
         res.json({ success: true, insertedId: result.insertedId });
       } catch (err) {
-        console.error(err);
+        // console.error(err);
         res.status(500).json({ success: false, message: err.message });
       }
     });
@@ -505,7 +505,7 @@ async function run() {
           workerChanged: workerDiff,
         });
       } catch (error) {
-        console.error("Error updating task:", error);
+        // console.error("Error updating task:", error);
         res.status(500).json({ message: "Failed to update task" });
       }
     });
@@ -576,7 +576,7 @@ async function run() {
           message: "Withdrawal approved and payment recorded successfully",
         });
       } catch (error) {
-        console.error(error);
+        // console.error(error);
         res.status(500).json({ message: "Server error" });
       }
     });
@@ -601,7 +601,7 @@ async function run() {
 
         res.json({ success: true, message: "Last login updated" });
       } catch (error) {
-        console.error(error);
+        // console.error(error);
         res.status(500).json({ message: "Server error" });
       }
     });
@@ -623,7 +623,7 @@ async function run() {
 
         res.json({ success: true, message: "Role updated successfully" });
       } catch (error) {
-        console.error(error);
+        // console.error(error);
         res.status(500).json({ message: "Server error" });
       }
     });
@@ -668,7 +668,7 @@ async function run() {
             message: "Submission rejected successfully",
           });
         } catch (err) {
-          console.error("Error rejecting submission:", err);
+          // console.error("Error rejecting submission:", err);
           res.status(500).json({ message: "Failed to reject submission" });
         }
       }
@@ -756,7 +756,7 @@ async function run() {
           const payments = await paymentsCollection.find().toArray();
           res.status(200).json(payments);
         } catch (err) {
-          console.error("Failed to fetch payments:", err);
+          // console.error("Failed to fetch payments:", err);
           res.status(500).json({ message: "Failed to fetch payments" });
         }
       }
@@ -786,7 +786,7 @@ async function run() {
             .toArray();
           res.json(payments);
         } catch (error) {
-          console.error(error);
+          // console.error(error);
           res.status(500).json({ message: "Server error" });
         }
       }
@@ -811,7 +811,7 @@ async function run() {
 
           res.json({ submitted: !!submission });
         } catch (error) {
-          console.error("Error fetching submission:", error);
+          // console.error("Error fetching submission:", error);
           res.status(500).json({ success: false, message: error.message });
         }
       }
@@ -832,7 +832,7 @@ async function run() {
 
           res.json(submissions);
         } catch (error) {
-          console.error("Error fetching submissions:", error);
+          // console.error("Error fetching submissions:", error);
           res.status(500).json({ success: false, message: error.message });
         }
       }
@@ -866,7 +866,7 @@ async function run() {
 
           res.json(submissions);
         } catch (error) {
-          console.error("Error fetching buyer submissions:", error);
+          // console.error("Error fetching buyer submissions:", error);
           res.status(500).json({ message: "Server error" });
         }
       }
@@ -908,7 +908,7 @@ async function run() {
 
           res.json(withdrawals);
         } catch (error) {
-          console.error("Error fetching withdrawals:", error);
+          // console.error("Error fetching withdrawals:", error);
           res.status(500).json({ message: "Server error" });
         }
       }
@@ -923,7 +923,7 @@ async function run() {
           const submissions = await subCollection.find({}).toArray();
           res.status(200).json(submissions);
         } catch (err) {
-          console.error(err);
+          // console.error(err);
           res.status(500).json({ message: "Failed to fetch submissions" });
         }
       }
@@ -985,7 +985,7 @@ async function run() {
             updatedCoins,
           });
         } catch (error) {
-          console.error("Error deleting task:", error);
+          // console.error("Error deleting task:", error);
           res.status(500).json({ message: "Failed to delete task" });
         }
       }
@@ -1017,7 +1017,7 @@ async function run() {
 
           res.json({ success: true, message: "User deleted successfully" });
         } catch (error) {
-          console.error("Error deleting user:", error);
+          // console.error("Error deleting user:", error);
           res.status(500).json({ success: false, message: "Server error" });
         }
       }
@@ -1047,10 +1047,10 @@ async function run() {
     //..................................end..................................................
 
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    );
+    // await client.db("admin").command({ ping: 1 });
+    // console.log(
+    //   "Pinged your deployment. You successfully connected to MongoDB!"
+    // );
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
@@ -1063,5 +1063,5 @@ app.get("/", (req, res) => {
 });
 
 server.listen(port, () => {
-  console.log(`WorkNest server is running on port ${port} with Socket.IO`);
+  // console.log(`WorkNest server is running on port ${port} with Socket.IO`);
 });
