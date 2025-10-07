@@ -48,6 +48,7 @@ async function run() {
     const usersCollection = client.db("allUsersDb").collection("allUsers");
     const tasksCollection = client.db("allTasksDB").collection("allTasks");
     const subCollection = client.db("submissionDB").collection("allSubmits");
+    const reportsCollection = client.db("reportsDB").collection("allReports");
     const withdrawCollection = client
       .db("withdrawDB")
       .collection("allWithdraws");
@@ -59,7 +60,6 @@ async function run() {
     // ......................................!.............................................
 
     io.on("connection", (socket) => {
-     
       socket.on("join", (email) => {
         // console.log(`${email} joined`);
         socket.join(email);
@@ -115,7 +115,6 @@ async function run() {
 
     const verifyRoles = (roles) => {
       return async (req, res, next) => {
-       
         const email = req.decoded?.email;
         if (!email) return res.status(401).json({ message: "Unauthorized" });
 
@@ -138,23 +137,19 @@ async function run() {
         const user = req.body;
         // console.log(user);
 
-        
         const existingUser = await usersCollection.findOne({
           email: user.email,
         });
 
         if (existingUser) {
-         
           const result = await usersCollection.updateOne(
             { email: user.email },
             { $set: { last_log_in: new Date().toISOString() } }
           );
           res.status(200).json({ message: "User updated", result });
         } else {
-         
           const result = await usersCollection.insertOne(user);
 
-         
           await createNotification({
             message: `🎉 Congratulations ${
               user.name
@@ -172,8 +167,6 @@ async function run() {
         res.status(500).json({ message: "Server error" });
       }
     });
-
-   
 
     app.post("/allTasks", async (req, res) => {
       try {
@@ -218,7 +211,7 @@ async function run() {
 
     app.post("/create-payment-intent", async (req, res) => {
       try {
-        const { amount } = req.body; 
+        const { amount } = req.body;
         if (!amount || amount <= 0) {
           return res.status(400).json({ error: "Invalid amount" });
         }
@@ -257,21 +250,18 @@ async function run() {
           date: new Date(),
         };
 
-        
         const result = await paymentsCollection.insertOne(paymentData);
 
-        
         await usersCollection.updateOne(
           { email },
-          { $inc: { coins } }, 
+          { $inc: { coins } },
           { upsert: true }
         );
 
-        
         await createNotification({
           message: `🎉 Congrats ${paid_by}, you have successfully purchased ${coins} coins with $${price}!`,
           toEmail: email,
-          actionRoute: "/dashboard/worker-home", 
+          actionRoute: "/dashboard/worker-home",
         });
 
         res.json({ success: true, result });
@@ -295,7 +285,6 @@ async function run() {
           if (!submission)
             return res.status(404).json({ message: "Submission not found" });
 
-         
           const paymentData = {
             payment_type: "give",
             worker_name: submission.worker_name,
@@ -312,13 +301,11 @@ async function run() {
           };
           await paymentsCollection.insertOne(paymentData);
 
-          
           await usersCollection.updateOne(
             { email: submission.worker_email },
             { $inc: { coins: submission.payable_amount } }
           );
 
-          
           await subCollection.updateOne(
             { _id: new ObjectId(submissionId) },
             { $set: { status: "approved" } }
@@ -348,9 +335,8 @@ async function run() {
           status: "pending",
         };
 
-        
         const result = await subCollection.insertOne(submissionData);
-        
+
         await tasksCollection.updateOne(
           { _id: new ObjectId(submission.task_id) },
           { $inc: { currently_required_workers: -1 } }
@@ -375,7 +361,6 @@ async function run() {
       }
     });
 
-    
     app.post("/withdrawals", async (req, res) => {
       try {
         const {
@@ -397,7 +382,6 @@ async function run() {
           return res.status(400).json({ message: "All fields are required" });
         }
 
-        
         const withdrawal = {
           worker_email,
           worker_name,
@@ -413,8 +397,8 @@ async function run() {
 
         await createNotification({
           message: `${worker_name} requested a withdrawal of ${withdrawal_coin} coins`,
-          toEmail: adminEmail, 
-          actionRoute: "/dashboard", 
+          toEmail: adminEmail,
+          actionRoute: "/dashboard",
         });
 
         res.json({ success: true, insertedId: result.insertedId });
@@ -423,31 +407,65 @@ async function run() {
         res.status(500).json({ success: false, message: err.message });
       }
     });
+
+    app.post("/reports", async (req, res) => {
+      try {
+        const {
+          task_id,
+          task_title,
+          buyer_name,
+          buyer_email,
+          reported_by,
+          reported_by_name,
+          reason,
+        } = req.body;
+
+        const report = {
+          task_id,
+          task_title,
+          buyer_name,
+          buyer_email,
+          reported_by,
+          reported_by_name,
+          reason,
+          report_date: new Date(),
+        };
+
+        const result = await reportsCollection.insertOne(report);
+
+        
+        await createNotification({
+          message: `${reported_by_name} reported the task "${task_title}"`,
+          toEmail: adminEmail,
+          actionRoute: "/dashboard",
+        });
+
+        res.json({ success: true, insertedId: result.insertedId });
+      } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+      }
+    });
+
     // ................................!....................................................
 
     //...............................All Put...............................................
 
-    
     app.put("/allTasks/:id", async (req, res) => {
       try {
         const id = req.params.id;
         const { task_title, task_detail, currently_required_workers } =
           req.body;
 
-       
         if (!ObjectId.isValid(id)) {
           return res.status(400).json({ message: "Invalid task ID" });
         }
 
-       
         const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
         if (!task) return res.status(404).json({ message: "Task not found" });
 
-       
         const user = await usersCollection.findOne({ email: task.buyer_email });
         if (!user) return res.status(404).json({ message: "User not found" });
 
-      
         const oldRequiredWorkers = Number(task.required_workers || 0);
         const oldCurrentlyRequired = Number(
           task.currently_required_workers || 0
@@ -455,25 +473,21 @@ async function run() {
         const payablePerWorker = Number(task.payable_amount || 0);
         const oldTotalPayable = Number(task.total_payable_amount || 0);
 
-        
         const submittedWorkers = oldRequiredWorkers - oldCurrentlyRequired;
 
-       
         const desiredCurrentlyRequired = Number(
           currently_required_workers || oldCurrentlyRequired
         );
         const newRequiredWorkers = submittedWorkers + desiredCurrentlyRequired;
 
-       
-        const workerDiff = newRequiredWorkers - oldRequiredWorkers; 
-        const newTotalPayable = newRequiredWorkers * payablePerWorker; 
-        const coinDiff = newTotalPayable - oldTotalPayable; 
-       
+        const workerDiff = newRequiredWorkers - oldRequiredWorkers;
+        const newTotalPayable = newRequiredWorkers * payablePerWorker;
+        const coinDiff = newTotalPayable - oldTotalPayable;
+
         if (coinDiff > 0 && user.coins < coinDiff) {
           return res.status(400).json({ message: "Insufficient coins" });
         }
 
-      
         const updateData = {
           task_title,
           task_detail,
@@ -489,7 +503,6 @@ async function run() {
           }
         );
 
-      
         if (coinDiff !== 0) {
           await usersCollection.updateOne(
             { email: task.buyer_email },
@@ -519,7 +532,6 @@ async function run() {
           return res.status(400).json({ message: "Invalid withdrawal ID" });
         }
 
-        
         const withdraw = await withdrawCollection.findOne({
           _id: new ObjectId(id),
         });
@@ -530,7 +542,6 @@ async function run() {
         }
 
         if (status === "approved") {
-         
           const user = await usersCollection.findOne({
             email: withdraw.worker_email,
           });
@@ -538,13 +549,11 @@ async function run() {
             return res.status(404).json({ message: "User not found" });
           }
 
-        
           await usersCollection.updateOne(
             { email: withdraw.worker_email },
             { $inc: { coins: -withdraw.withdrawal_coin } }
           );
 
-          
           const paymentData = {
             type_of_payment: "get",
             worker_email: withdraw.worker_email,
@@ -566,7 +575,6 @@ async function run() {
           actionRoute: "/dashboard",
         });
 
-       
         await withdrawCollection.updateOne(
           { _id: new ObjectId(id) },
           { $set: { status } }
@@ -584,7 +592,6 @@ async function run() {
 
     //...................................All Patch...........................................
 
-   
     app.patch("/allUsers/:email", async (req, res) => {
       try {
         const email = req.params.email;
@@ -609,7 +616,7 @@ async function run() {
     app.patch("/allUsers/:email/role", async (req, res) => {
       try {
         const email = req.params.email;
-        const { role } = req.body; 
+        const { role } = req.body;
 
         if (!role) return res.status(400).json({ message: "Role is required" });
 
@@ -634,7 +641,7 @@ async function run() {
       verifyRoles(["buyer"]),
       async (req, res) => {
         const submissionId = req.params.id;
-       
+
         const submission = await subCollection.findOne({
           _id: new ObjectId(submissionId),
         });
@@ -690,7 +697,7 @@ async function run() {
     app.get("/best-workers", async (req, res) => {
       const bestWorkers = await workersCollection
         .find({ role: "worker" })
-        .sort({ coins: -1 }) 
+        .sort({ coins: -1 })
         .limit(6)
         .toArray();
       res.send(bestWorkers);
@@ -712,8 +719,6 @@ async function run() {
       if (!user) return res.status(404).json(null);
       res.json(user);
     });
-
-   
 
     app.get(
       "/allTasks",
@@ -746,7 +751,7 @@ async function run() {
         res.json(tasks);
       }
     );
-   
+
     app.get(
       "/payments",
       verifyFBToken,
@@ -770,7 +775,6 @@ async function run() {
         try {
           const email = req.params.email;
 
-         
           if (email !== req.decoded.email) {
             return res
               .status(403)
@@ -798,7 +802,7 @@ async function run() {
       verifyRoles(["worker"]),
       async (req, res) => {
         try {
-          const { taskId, workerEmail } = req.params; 
+          const { taskId, workerEmail } = req.params;
 
           if (!workerEmail) {
             return res.status(400).json({ message: "Worker email required" });
@@ -816,7 +820,7 @@ async function run() {
         }
       }
     );
-    
+
     app.get(
       "/mySubmits/:workerEmail",
       verifyFBToken,
@@ -827,7 +831,7 @@ async function run() {
 
           const submissions = await subCollection
             .find({ worker_email: workerEmail })
-            .sort({ current_date: -1 }) 
+            .sort({ current_date: -1 })
             .toArray();
 
           res.json(submissions);
@@ -838,16 +842,14 @@ async function run() {
       }
     );
 
-   
     app.get(
       "/submissions/buyer/:buyerEmail",
       verifyFBToken,
-      verifyRoles(["buyer"]), 
+      verifyRoles(["buyer"]),
       async (req, res) => {
         try {
           const buyerEmail = req.params.buyerEmail;
 
-          
           if (buyerEmail !== req.decoded.email) {
             return res.status(403).json({
               message: "Forbidden: cannot access others' submissions",
@@ -858,10 +860,9 @@ async function run() {
             .db("submissionDB")
             .collection("allSubmits");
 
-          
           const submissions = await subCollection
             .find({ buyer_email: buyerEmail })
-            .sort({ current_date: -1 }) 
+            .sort({ current_date: -1 })
             .toArray();
 
           res.json(submissions);
@@ -881,7 +882,7 @@ async function run() {
         res.send(withDraws);
       }
     );
-    
+
     app.get(
       "/allWithdraws/workers/:email",
       verifyFBToken,
@@ -890,7 +891,6 @@ async function run() {
         try {
           const workerEmail = req.params.email;
 
-         
           if (workerEmail !== req.decoded.email) {
             return res.status(403).json({
               message: "Forbidden: cannot access others' withdrawals",
@@ -903,7 +903,7 @@ async function run() {
 
           const withdrawals = await withdrawCollection
             .find({ worker_email: workerEmail })
-            .sort({ withdraw_date: -1 }) 
+            .sort({ withdraw_date: -1 })
             .toArray();
 
           res.json(withdrawals);
@@ -941,13 +941,11 @@ async function run() {
         try {
           const id = req.params.id;
 
-          
           const task = await tasksCollection.findOne({ _id: new ObjectId(id) });
           if (!task) {
             return res.status(404).json({ message: "Task not found" });
           }
 
-        
           const result = await tasksCollection.deleteOne({
             _id: new ObjectId(id),
           });
@@ -955,8 +953,8 @@ async function run() {
             return res.status(404).json({ message: "Failed to delete task" });
           }
 
-          
-          const refundAmount = Number(task.payable_amount * task.currently_required_workers) || 0;
+          const refundAmount =
+            Number(task.payable_amount * task.currently_required_workers) || 0;
           const buyerEmail = task.buyer_email;
 
           const user = await usersCollection.findOne({ email: buyerEmail });
