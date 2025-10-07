@@ -437,7 +437,7 @@ async function run() {
         await createNotification({
           message: `${reported_by_name} reported the task "${task_title}"`,
           toEmail: adminEmail,
-          actionRoute: "/dashboard",
+          actionRoute: "/dashboard/manage-task",
         });
 
         res.json({ success: true, insertedId: result.insertedId });
