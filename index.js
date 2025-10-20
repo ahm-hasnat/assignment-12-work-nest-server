@@ -722,8 +722,7 @@ async function run() {
 
     app.get(
       "/allTasks",
-      verifyFBToken,
-      verifyRoles(["admin", "worker"]),
+     
       async (req, res) => {
         const tasks = await tasksCollection.find().toArray();
         res.json(tasks);
