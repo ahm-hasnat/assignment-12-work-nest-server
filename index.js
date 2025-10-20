@@ -433,7 +433,6 @@ async function run() {
 
         const result = await reportsCollection.insertOne(report);
 
-        
         await createNotification({
           message: `${reported_by_name} reported the task "${task_title}"`,
           toEmail: adminEmail,
@@ -449,6 +448,27 @@ async function run() {
     // ................................!....................................................
 
     //...............................All Put...............................................
+
+    // update user profile
+    app.put("/allUsers/:email", async (req, res) => {
+      const email = req.params.email;
+      const updatedData = req.body;
+
+      const query = { email };
+      const updateDoc = {
+        $set: {
+          name: updatedData.name,
+          phone: updatedData.phone,
+          address: updatedData.address,
+          bio: updatedData.bio,
+        },
+      };
+
+      const result = await usersCollection.updateOne(query, updateDoc, {
+        upsert: true,
+      });
+      res.send(result);
+    });
 
     app.put("/allTasks/:id", async (req, res) => {
       try {
@@ -722,7 +742,7 @@ async function run() {
 
     app.get(
       "/allTasks",
-     
+
       async (req, res) => {
         const tasks = await tasksCollection.find().toArray();
         res.json(tasks);
