@@ -56,6 +56,7 @@ async function run() {
     const notificationsCollection = client
       .db("notificationsDb")
       .collection("notifications");
+    
 
     // ......................................!.............................................
 
@@ -944,6 +945,21 @@ async function run() {
         } catch (err) {
           // console.error(err);
           res.status(500).json({ message: "Failed to fetch submissions" });
+        }
+      }
+    );
+
+    app.get(
+      "/reports",
+      verifyFBToken,
+      verifyRoles(["admin"]),
+      async (req, res) => {
+        try {
+          const reports = await reportsCollection.find({}).toArray();
+          res.status(200).json(reports);
+        } catch (err) {
+          // console.error(err);
+          res.status(500).json({ message: "Failed to fetch reports" });
         }
       }
     );
